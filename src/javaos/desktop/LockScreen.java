@@ -11,7 +11,6 @@ import java.awt.Graphics2D;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Date;

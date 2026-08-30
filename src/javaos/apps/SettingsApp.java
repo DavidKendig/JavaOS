@@ -23,6 +23,7 @@ import javax.swing.JTextField;
 
 import javaos.Settings;
 import javaos.desktop.Shell;
+import javaos.interop.OfficeSuite;
 import javaos.ui.Icons;
 import javaos.ui.SunTheme;
 import javaos.ui.Ui;
@@ -39,6 +40,9 @@ public class SettingsApp extends AppWindow {
     private final JCheckBox showSeconds = new JCheckBox("Show seconds");
     private final JCheckBox outlineDrag = new JCheckBox("Drag windows as an outline (faster)");
     private final JCheckBox splash = new JCheckBox("Show the splash screen at start-up");
+    private final JCheckBox preferOffice = new JCheckBox(
+            "Open documents in Microsoft Office or LibreOffice when installed");
+    private final JPanel suiteReport = new JPanel();
     private final JTextField userName = new JTextField(14);
     private final JLabel lockState = new JLabel();
     private final Preview preview = new Preview();
@@ -51,6 +55,7 @@ public class SettingsApp extends AppWindow {
         JTabbedPane tabs = new JTabbedPane();
         tabs.addTab("Appearance", Icons.paint(16), appearanceTab());
         tabs.addTab("Desktop", Icons.computer(16), desktopTab());
+        tabs.addTab("Office", Icons.officeWord(16), officeTab());
         tabs.addTab("Clock", Icons.info(16), clockTab());
         tabs.addTab("Account", Icons.dukeIcon(16), accountTab());
 
@@ -70,8 +75,10 @@ public class SettingsApp extends AppWindow {
         load();
         if ("desktop".equals(argument)) {
             tabs.setSelectedIndex(1);
-        } else if ("clock".equals(argument)) {
+        } else if ("office".equals(argument)) {
             tabs.setSelectedIndex(2);
+        } else if ("clock".equals(argument)) {
+            tabs.setSelectedIndex(3);
         }
         status("Changes take effect when you press Apply.");
     }
@@ -129,6 +136,67 @@ public class SettingsApp extends AppWindow {
         panel.add(splash);
         panel.add(javax.swing.Box.createVerticalGlue());
         return panel;
+    }
+
+    /**
+     * Which office application opens a document. JavaOS looks for Microsoft
+     * Office first, then LibreOffice, then falls back to its own editors; this
+     * tab shows what it found and lets the user pin everything to JavaOS
+     * instead.
+     */
+    private JComponent officeTab() {
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+
+        preferOffice.setAlignmentX(0f);
+        panel.add(preferOffice);
+        JLabel note = new JLabel("<html>Off keeps every document inside JavaOS, which reads"
+                + " and writes ODF and OOXML<br>text and spreadsheets on its own."
+                + " Presentations and databases need a suite either way.</html>");
+        note.setFont(new Font("Dialog", Font.PLAIN, 11));
+        note.setAlignmentX(0f);
+        panel.add(note);
+        panel.add(javax.swing.Box.createVerticalStrut(10));
+
+        suiteReport.setLayout(new BoxLayout(suiteReport, BoxLayout.Y_AXIS));
+        suiteReport.setBorder(BorderFactory.createTitledBorder("Installed on this machine"));
+        suiteReport.setAlignmentX(0f);
+        panel.add(suiteReport);
+
+        JButton again = new JButton("Check Again", Icons.officeHandover(16));
+        again.setAlignmentX(0f);
+        again.addActionListener(e -> {
+            OfficeSuite.refresh();
+            showSuites();
+            status("Looked for Microsoft Office and LibreOffice again.");
+        });
+        JPanel buttons = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 6));
+        buttons.setAlignmentX(0f);
+        buttons.add(again);
+        panel.add(buttons);
+        panel.add(javax.swing.Box.createVerticalGlue());
+        showSuites();
+        return panel;
+    }
+
+    /** One line per office role, saying who would take it. */
+    private void showSuites() {
+        suiteReport.removeAll();
+        for (OfficeSuite.Program program : OfficeSuite.Program.values()) {
+            String found = OfficeSuite.handlerFor(program)
+                    .map(OfficeSuite.Handler::describe)
+                    .orElse(program.hasNativeApp()
+                            ? "not installed -- JavaOS opens these itself"
+                            : "not installed -- JavaOS has no editor for these");
+            JLabel line = new JLabel(program.label + ": " + found,
+                    SuiteApp.icon(program, 16), JLabel.LEADING);
+            line.setFont(new Font("Dialog", Font.PLAIN, 11));
+            line.setAlignmentX(0f);
+            suiteReport.add(line);
+        }
+        suiteReport.revalidate();
+        suiteReport.repaint();
     }
 
     private JComponent clockTab() {
@@ -268,6 +336,7 @@ public class SettingsApp extends AppWindow {
         showSeconds.setSelected(settings.showSeconds());
         outlineDrag.setSelected(settings.outlineDrag());
         splash.setSelected(settings.showSplash());
+        preferOffice.setSelected(settings.preferInstalledOffice());
         userName.setText(settings.userName());
     }
 
@@ -282,6 +351,7 @@ public class SettingsApp extends AppWindow {
         settings.setShowSeconds(showSeconds.isSelected());
         settings.setOutlineDrag(outlineDrag.isSelected());
         settings.setShowSplash(splash.isSelected());
+        settings.setPreferInstalledOffice(preferOffice.isSelected());
         String name = userName.getText().trim();
         settings.setUserName(name.isEmpty() ? "duke" : name);
         settings.save();

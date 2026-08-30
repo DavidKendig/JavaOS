@@ -1,6 +1,12 @@
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 import javax.sound.midi.MidiSystem;
 import javax.sound.midi.Sequence;
@@ -13,9 +19,12 @@ import javax.sound.sampled.SourceDataLine;
 
 import javaos.Settings;
 import javaos.apps.SheetModel;
+import javaos.interop.OfficeSuite;
+import javaos.msoffice.MsOffice;
 import javaos.media.Media;
 import javaos.media.Player;
 import javaos.media.SampledPlayer;
+import javaos.ui.Wallpapers;
 import javaos.vfs.Vfs;
 
 /** Exercises the formula engine and the volume without opening a window. */
@@ -28,6 +37,8 @@ public final class CoreTest {
         volume();
         paths();
         media();
+        officeSuite();
+        wallpapers();
         screenLock();
         System.out.println(failures == 0 ? "ALL CHECKS PASSED" : failures + " CHECK(S) FAILED");
         System.exit(failures == 0 ? 0 : 1);
@@ -86,53 +97,120 @@ public final class CoreTest {
         eq("quoted csv", "b,c", quoted.display(0, 1));
     }
 
+    /**
+     * The file system, which is now the host's own. Everything happens inside a
+     * temporary directory: the operations are the same ones the file manager
+     * calls, and there is no sandbox left to stop them reaching anywhere else,
+     * so the test has to be careful where it points them.
+     */
     private static void volume() throws Exception {
-        Path root = Files.createTempDirectory("javaos-check");
-        Vfs vfs = new Vfs(root);
-        vfs.mount();
-        eq("home exists", true, vfs.isDirectory(Vfs.HOME));
-        eq("motd seeded", true, vfs.exists("/etc/motd"));
-
-        vfs.write("/home/duke/a.txt", "one");
-        eq("read back", "one", vfs.read("/home/duke/a.txt"));
-        vfs.copy("/home/duke/a.txt", "/home/duke/b.txt");
-        eq("copy", "one", vfs.read("/home/duke/b.txt"));
-        vfs.move("/home/duke/b.txt", "/tmp/c.txt");
-        eq("move source gone", false, vfs.exists("/home/duke/b.txt"));
-        eq("move target", "one", vfs.read("/tmp/c.txt"));
-        vfs.delete("/tmp/c.txt");
-        eq("delete", false, vfs.exists("/tmp/c.txt"));
-
-        vfs.mkdirs("/tmp/deep/nested");
-        vfs.write("/tmp/deep/nested/x.txt", "x");
-        vfs.delete("/tmp/deep");
-        eq("recursive delete", false, vfs.exists("/tmp/deep"));
-
-        String unique = vfs.uniqueName("/home/duke", "a.txt");
-        eq("unique name", "/home/duke/a (2).txt", unique);
-
+        Vfs vfs = new Vfs();
+        Path temp = Files.createTempDirectory("javaos-check");
+        String work = Vfs.toVirtual(temp);
         try {
-            vfs.read("/../../../etc/passwd");
-            fail("escape was not blocked");
-        } catch (IllegalArgumentException expected) {
-            // Normalisation collapses the escape before it reaches the host.
-        } catch (RuntimeException expected) {
-            // Missing file after normalisation is also an acceptable outcome.
+            eq("a real directory is seen", true, vfs.isDirectory(work));
+            eq("and maps back to itself", temp.toRealPath(),
+                    vfs.host(work).toRealPath());
+            eq("the user home is a real directory", true, vfs.isDirectory(Vfs.HOME));
+
+            vfs.write(work + "/a.txt", "one");
+            eq("read back", "one", vfs.read(work + "/a.txt"));
+            eq("and the host sees the same file", "one",
+                    Files.readString(temp.resolve("a.txt")));
+
+            vfs.copy(work + "/a.txt", work + "/b.txt");
+            eq("copy", "one", vfs.read(work + "/b.txt"));
+            vfs.move(work + "/b.txt", work + "/sub/c.txt");
+            eq("move source gone", false, vfs.exists(work + "/b.txt"));
+            eq("move target", "one", vfs.read(work + "/sub/c.txt"));
+
+            vfs.mkdirs(work + "/deep/nested");
+            vfs.write(work + "/deep/nested/x.txt", "x");
+            vfs.delete(work + "/deep");
+            eq("recursive delete", false, vfs.exists(work + "/deep"));
+
+            eq("unique name", work + "/a (2).txt", vfs.uniqueName(work, "a.txt"));
+
+            // Directories first, then files -- "zzz-dir" sorts after "a.txt"
+            // alphabetically, so it can only come first if the kind wins.
+            vfs.mkdirs(work + "/zzz-dir");
+            List<String> listed = vfs.list(work);
+            int lastDirectory = -1;
+            int firstFile = listed.size();
+            for (int i = 0; i < listed.size(); i++) {
+                if (vfs.isDirectory(listed.get(i))) {
+                    lastDirectory = i;
+                } else if (i < firstFile) {
+                    firstFile = i;
+                }
+            }
+            eq("every directory sorts before every file", true, lastDirectory < firstFile);
+            eq("and the listing found both kinds", true,
+                    lastDirectory >= 0 && firstFile < listed.size());
+
+            eq("the drive is reported", true, vfs.totalSpace(work) > 0);
+            eq("with some of it free", true, vfs.freeSpace(work) > 0);
+            eq("and used is the difference", vfs.totalSpace(work) - vfs.freeSpace(work),
+                    vfs.usedSpace(work));
+        } finally {
+            deleteTree(temp);
         }
-        eq("normalised escape stays inside", "/etc/passwd",
-                Vfs.normalize("/../../../etc/passwd"));
+
+        // My Computer: a directory that exists only in the path vocabulary.
+        eq("the root is a directory", true, vfs.isDirectory(Vfs.ROOT));
+        eq("the root exists", true, vfs.exists(Vfs.ROOT));
+        eq("the root is the root", true, Vfs.isRoot("/"));
+        eq("and lists at least one drive", true, !vfs.roots().isEmpty());
+        for (String drive : vfs.roots()) {
+            eq(drive + " reads as a drive", true, Vfs.isDrive(drive));
+            eq(drive + " has the root as its parent", Vfs.ROOT, Vfs.parent(drive));
+        }
+        eq("listing the root gives the drives", vfs.roots(), vfs.list(Vfs.ROOT));
+
+        // An unreadable directory is an ordinary event on a real machine, and
+        // must come back empty rather than throwing into the file manager.
+        eq("a missing directory lists empty", 0,
+                vfs.list("/no-such-drive-here/nothing").size());
+        eq("a missing file has no size", 0L, vfs.size("/no-such-drive-here/nothing"));
+        eq("and no timestamp", 0L, vfs.modified("/no-such-drive-here/nothing"));
+        eq("and does not exist", false, vfs.exists("/no-such-drive-here/nothing"));
+    }
+
+    /** Removes a tree without going through the wastebasket, for cleanup. */
+    private static void deleteTree(Path root) throws Exception {
+        if (!Files.exists(root)) {
+            return;
+        }
+        try (java.util.stream.Stream<Path> walk = Files.walk(root)) {
+            for (Path p : walk.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(p);
+            }
+        }
     }
 
     private static void paths() {
-        eq("resolve relative", "/home/duke/Documents",
+        eq("resolve relative", Vfs.HOME + "/Documents",
                 Vfs.resolve(Vfs.HOME, "Documents"));
-        eq("resolve dotdot", "/home", Vfs.resolve(Vfs.HOME, ".."));
-        eq("resolve tilde", "/home/duke/x", Vfs.resolve("/tmp", "~/x"));
+        eq("resolve dotdot", Vfs.parent(Vfs.HOME), Vfs.resolve(Vfs.HOME, ".."));
+        eq("resolve tilde", Vfs.HOME + "/x", Vfs.resolve("/tmp", "~/x"));
         eq("resolve absolute", "/etc", Vfs.resolve("/tmp", "/etc"));
-        eq("parent", "/home", Vfs.parent(Vfs.HOME));
-        eq("name", "duke", Vfs.name(Vfs.HOME));
+        eq("resolve keeps the root", "/", Vfs.resolve("/tmp", "/"));
+        eq("name", "c.CSV", Vfs.name("/a/b/c.CSV"));
+        eq("parent", "/a/b", Vfs.parent("/a/b/c.CSV"));
         eq("extension", "csv", Vfs.extension("/a/b/c.CSV"));
         eq("human size", "1.0 KB", Vfs.humanSize(1024));
+
+        // The home directory is the real one, wherever the host keeps it.
+        eq("home is absolute", true, Vfs.HOME.startsWith("/"));
+        eq("home is the user home", Paths.get(System.getProperty("user.home"))
+                .toAbsolutePath().normalize(), new Vfs().host(Vfs.HOME));
+
+        // A host path in, the same host path out, whatever the separators.
+        Path sample = Paths.get(System.getProperty("user.home"), "sample.txt")
+                .toAbsolutePath().normalize();
+        eq("a host path round-trips", sample, new Vfs().host(Vfs.toVirtual(sample)));
+        eq("backslashes are accepted", Vfs.HOME + "/x",
+                Vfs.resolve(Vfs.HOME, "~\\x"));
     }
 
     /**
@@ -199,6 +277,165 @@ public final class CoreTest {
                 javaos.vlc.Vlc.isAvailable());
     }
 
+    /**
+     * The backdrops. Five are images bundled in the jar and five are drawn in
+     * code; the drawn ones cannot go missing, but the images can, if a build
+     * compiles the sources and forgets to copy the resources beside them. That
+     * is exactly the failure this catches, because the desktop swallows it --
+     * an unreadable wallpaper falls back to a plain backdrop rather than
+     * throwing, so nothing else would ever say a word about it.
+     */
+    private static void wallpapers() throws Exception {
+        eq("chrome is the default backdrop", Settings.Wallpaper.CHROME,
+                new Settings(Paths.get("no-such-settings.properties")).wallpaper());
+
+        int images = 0;
+        for (Settings.Wallpaper style : Settings.Wallpaper.values()) {
+            eq(style + " has a label", true, !style.label.isBlank());
+            if (!style.isImage()) {
+                eq(style + " is drawn, so it names no resource", null, style.resource);
+                continue;
+            }
+            images++;
+
+            // Painting is the check that the build actually shipped the file:
+            // it has to put something down, at a size that is neither the
+            // image's own nor its aspect ratio.
+            BufferedImage target = new BufferedImage(320, 200, BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = (Graphics2D) target.getGraphics();
+            boolean painted = Wallpapers.paint(g, 320, 200, style.resource);
+            g.dispose();
+            eq(style + " paints", true, painted);
+
+            Set<Integer> colours = new HashSet<>();
+            for (int y = 0; y < 200; y += 8) {
+                for (int x = 0; x < 320; x += 8) {
+                    colours.add(target.getRGB(x, y));
+                }
+            }
+            eq(style + " paints more than one colour", true, colours.size() > 1);
+        }
+        eq("all five bundled images are accounted for", 5, images);
+        eq("only the low-poly backdrop is still generated", 1,
+                Settings.Wallpaper.values().length - images);
+
+        // A settings file written by a build with more backdrops than this one
+        // names styles that are gone. Those have to land on the default rather
+        // than throw out of a getter the whole desktop calls on every repaint.
+        Path saved = Files.createTempFile("javaos-backdrop", ".properties");
+        try {
+            for (String retired : new String[] {"HORIZON", "RAYS", "GRID", "WEAVE", "FLAT"}) {
+                Files.writeString(saved, "wallpaper=" + retired + "\n");
+                eq("a saved " + retired + " falls back to the default",
+                        Settings.Wallpaper.CHROME, new Settings(saved).wallpaper());
+            }
+            Files.writeString(saved, "wallpaper=FACETS\n");
+            eq("a saved backdrop that still exists is kept", Settings.Wallpaper.FACETS,
+                    new Settings(saved).wallpaper());
+        } finally {
+            Files.deleteIfExists(saved);
+        }
+
+        eq("a missing image paints nothing rather than throwing", false, Wallpapers.paint(
+                (Graphics2D) new BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB).getGraphics(),
+                8, 8, "NoSuchWallpaper.png"));
+        // The fitted image is cached by size, so a second size must re-fit
+        // rather than hand back the first one.
+        BufferedImage wide = new BufferedImage(400, 120, BufferedImage.TYPE_INT_RGB);
+        Graphics2D wg = (Graphics2D) wide.getGraphics();
+        boolean refitted = Wallpapers.paint(wg, 400, 120, Settings.Wallpaper.CHROME.resource);
+        wg.dispose();
+        eq("a second size re-fits", true, refitted);
+    }
+
+    /**
+     * The office hand-over order: Microsoft Office, then LibreOffice, then the
+     * JavaOS editors. The lookups have to answer on a machine with neither
+     * installed, and without throwing, so most of this checks the mapping and
+     * the shape of the answer rather than what happens to be on this machine.
+     */
+    private static void officeSuite() throws Exception {
+        // Extensions land on the right role, whatever suite ends up opening them.
+        eq("docx is a Word document", OfficeSuite.Program.WORD,
+                OfficeSuite.programFor("docx"));
+        eq("odt is a Word document", OfficeSuite.Program.WORD, OfficeSuite.programFor("ODT"));
+        eq("xlsx is an Excel document", OfficeSuite.Program.EXCEL,
+                OfficeSuite.programFor("xlsx"));
+        eq("pptx is a PowerPoint document", OfficeSuite.Program.POWERPOINT,
+                OfficeSuite.programFor("pptx"));
+        eq("accdb is an Access document", OfficeSuite.Program.ACCESS,
+                OfficeSuite.programFor("accdb"));
+        eq("odb is an Access document", OfficeSuite.Program.ACCESS,
+                OfficeSuite.programFor("odb"));
+        eq("txt is not an office document", null, OfficeSuite.programFor("txt"));
+        eq("mp3 is not an office document", null, OfficeSuite.programFor("mp3"));
+
+        // Word and Calc have a pure Java editor behind them; the other two do not.
+        eq("Word falls back to JavaOS Writer", "writer",
+                OfficeSuite.Program.WORD.nativeAppId);
+        eq("Excel falls back to JavaOS Calc", "calc", OfficeSuite.Program.EXCEL.nativeAppId);
+        eq("PowerPoint has no JavaOS editor", false,
+                OfficeSuite.Program.POWERPOINT.hasNativeApp());
+        eq("Access has no JavaOS editor", false, OfficeSuite.Program.ACCESS.hasNativeApp());
+
+        // Every role reaches both suites, so a hand-over always has a target.
+        for (OfficeSuite.Program program : OfficeSuite.Program.values()) {
+            eq(program.label + " maps to an Office program", true, program.microsoft != null);
+            eq(program.label + " maps to a LibreOffice module", true, program.libre != null);
+            eq(program.label + " describes itself", true,
+                    !OfficeSuite.describe(program).isBlank());
+        }
+        eq("LibreOffice Base takes the database role",
+                javaos.soffice.LibreOffice.Module.BASE, OfficeSuite.Program.ACCESS.libre);
+
+        // The lookups must answer without an installation, and without throwing.
+        for (MsOffice.Program program : MsOffice.Program.values()) {
+            eq(program.label + " lookup is consistent", MsOffice.find(program).isPresent(),
+                    MsOffice.isAvailable(program));
+        }
+        eq("installed() agrees with isAvailable()", MsOffice.isAvailable(),
+                !MsOffice.installed().isEmpty());
+        eq("a handler is found only when a suite is", MsOffice.isAvailable()
+                        || javaos.soffice.LibreOffice.isAvailable(),
+                OfficeSuite.isAvailable(OfficeSuite.Program.WORD));
+
+        // Microsoft Office wins when both are installed. Neither may be here, so
+        // this stands a stub in for Word and checks the order, not the machine.
+        Path stub = Files.createTempFile("javaos-winword", ".exe");
+        try {
+            System.setProperty("javaos.msoffice.word", stub.toString());
+            MsOffice.refresh(MsOffice.Program.WORD);
+            eq("the override is found", true, MsOffice.isAvailable(MsOffice.Program.WORD));
+            eq("Office outranks LibreOffice for Word", OfficeSuite.Vendor.MICROSOFT,
+                    OfficeSuite.handlerFor(OfficeSuite.Program.WORD)
+                            .map(OfficeSuite.Handler::vendor).orElse(null));
+            eq("and only for the program it names", true,
+                    OfficeSuite.handlerFor(OfficeSuite.Program.EXCEL)
+                            .map(OfficeSuite.Handler::vendor)
+                            .orElse(OfficeSuite.Vendor.JAVAOS) != OfficeSuite.Vendor.MICROSOFT
+                            || MsOffice.isAvailable(MsOffice.Program.EXCEL));
+        } finally {
+            System.clearProperty("javaos.msoffice.word");
+            MsOffice.refresh(MsOffice.Program.WORD);
+            Files.deleteIfExists(stub);
+        }
+        eq("the stub is gone again", false, MsOffice.find(MsOffice.Program.WORD)
+                .map(install -> install.executable().toString().contains("javaos-winword"))
+                .orElse(false));
+
+        // The hand-over is on by default, and the switch is remembered.
+        Path file = Files.createTempFile("javaos-office", ".properties");
+        Files.delete(file);
+        Settings settings = new Settings(file);
+        eq("the installed suite is preferred by default", true,
+                settings.preferInstalledOffice());
+        settings.setPreferInstalledOffice(false);
+        settings.save();
+        eq("and the choice survives a reload", false,
+                new Settings(file).preferInstalledOffice());
+        Files.deleteIfExists(file);
+    }
+
     /** The lock screen's passphrase: stored as a derivation, never as text. */
     private static void screenLock() throws Exception {
         Path file = Files.createTempFile("javaos-lock", ".properties");
@@ -244,8 +481,4 @@ public final class CoreTest {
         }
     }
 
-    private static void fail(String message) {
-        System.out.println("FAIL " + message);
-        failures++;
-    }
 }

@@ -444,7 +444,8 @@ public class WriterApp extends AppWindow {
     }
 
     private void openDocument() {
-        String path = VfsChooser.open(this, vfs(), Vfs.HOME + "/Documents",
+        String path = VfsChooser.open(this, vfs(),
+                vfs().firstDirectory(Vfs.HOME + "/Documents"),
                 "Open Document", "odt", "docx", "txt", "rtf", "log", "md", "java",
                 "properties");
         if (path != null) {
@@ -488,7 +489,8 @@ public class WriterApp extends AppWindow {
     }
 
     private boolean saveAs() {
-        String path = VfsChooser.save(this, vfs(), Vfs.HOME + "/Documents",
+        String path = VfsChooser.save(this, vfs(),
+                vfs().firstDirectory(Vfs.HOME + "/Documents"),
                 documentPath() == null ? "untitled.txt" : Vfs.name(documentPath()),
                 "Save Document", "odt", "docx", "txt", "rtf");
         return path != null && writeTo(path);

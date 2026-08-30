@@ -47,7 +47,7 @@ import javaos.ui.Icons;
 import javaos.ui.Ui;
 import javaos.vfs.Vfs;
 
-/** Browses the volume: folder tree on the left, icon or detail view on the right. */
+/** Browses the host file system: folder tree left, icon or detail view right. */
 public class FileManagerApp extends AppWindow {
 
     private static final SimpleDateFormat STAMP = new SimpleDateFormat("dd/MM/yyyy HH:mm");
@@ -283,10 +283,13 @@ public class FileManagerApp extends AppWindow {
         menuBar.add(view);
 
         JMenu go = new JMenu("Go");
+        go.add(menuItem("My Computer", () -> navigate(Vfs.ROOT)));
         go.add(menuItem("Home", () -> navigate(Vfs.HOME)));
-        go.add(menuItem("Documents", () -> navigate(Vfs.HOME + "/Documents")));
-        go.add(menuItem("Pictures", () -> navigate(Vfs.HOME + "/Pictures")));
-        go.add(menuItem("Volume Root", () -> navigate("/")));
+        go.add(menuItem("Documents",
+                () -> navigate(vfs().firstDirectory(Vfs.HOME + "/Documents"))));
+        go.add(menuItem("Pictures",
+                () -> navigate(vfs().firstDirectory(Vfs.HOME + "/Pictures"))));
+
         menuBar.add(go);
 
         return menuBar;
@@ -421,9 +424,19 @@ public class FileManagerApp extends AppWindow {
         if (path == null) {
             return;
         }
+        if (Vfs.isRoot(path) || Vfs.isDrive(path)) {
+            error("A drive is not something this can delete.");
+            return;
+        }
+        // These are the user's own files now, not a sandbox: say which of the
+        // two things is about to happen, because only one of them is undoable.
+        String fate = Vfs.hasWastebasket()
+                ? "\n\nIt goes to the system wastebasket, so you can put it back."
+                : "\n\nThere is no wastebasket on this system, so this is permanent.";
         int confirm = JOptionPane.showInternalConfirmDialog(this,
                 "Delete " + Vfs.name(path) + "?"
-                        + (vfs().isDirectory(path) ? "\nThe folder and its contents go too." : ""),
+                        + (vfs().isDirectory(path) ? "\nThe folder and its contents go too." : "")
+                        + fate,
                 "Delete", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
         if (confirm == JOptionPane.YES_OPTION) {
             vfs().delete(path);
@@ -491,6 +504,13 @@ public class FileManagerApp extends AppWindow {
     }
 
     private Icon iconFor(String path, int size) {
+        if (Vfs.isRoot(path)) {
+            return Icons.computer(size);
+        }
+        // A whole drive gets the disk, not a manila folder.
+        if (Vfs.isDrive(path)) {
+            return Icons.disk(size);
+        }
         if (vfs().isDirectory(path)) {
             return Icons.folder(size);
         }

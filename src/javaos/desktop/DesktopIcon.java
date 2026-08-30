@@ -112,7 +112,9 @@ public class DesktopIcon extends JComponent {
             g2.setColor(Color.WHITE);
             g2.drawString(text, textX, textY);
         } else {
-            Ui.drawOutlinedText(g2, text, textX, textY, Color.WHITE, new Color(0, 0, 0, 160));
+            // A ring rather than a shadow: the backdrop can be light or dark
+            // depending on the wallpaper, and this label has to hold up on both.
+            Ui.drawHaloText(g2, text, textX, textY, Color.WHITE, new Color(0, 0, 0, 150));
         }
         g2.dispose();
     }

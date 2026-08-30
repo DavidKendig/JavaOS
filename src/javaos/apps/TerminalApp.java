@@ -221,8 +221,7 @@ public class TerminalApp extends AppWindow {
                             frame.isIcon() ? "minimised" : "running"));
                 }
             }
-            case "df" -> print("Volume " + vfs().realRoot() + "\n  used "
-                    + Vfs.humanSize(vfs().usedBytes()));
+            case "df" -> printDiskUsage();
             case "free" -> {
                 Runtime rt = Runtime.getRuntime();
                 print("  heap used  " + Vfs.humanSize(rt.totalMemory() - rt.freeMemory()));
@@ -259,6 +258,30 @@ public class TerminalApp extends AppWindow {
               """.stripTrailing());
     }
 
+    /** Free and used space on the drive holding the working directory. */
+    private void printDiskUsage() {
+        long total = vfs().totalSpace(cwd);
+        if (total == 0) {
+            print("  no disk information for " + cwd);
+            return;
+        }
+        long used = vfs().usedSpace(cwd);
+        print(String.format("  %-12s %10s %10s %10s  %s", "FILESYSTEM", "SIZE", "USED",
+                "FREE", "MOUNTED ON"));
+        print(String.format("  %-12s %10s %10s %10s  %s",
+                Vfs.name(driveOf(cwd)), Vfs.humanSize(total), Vfs.humanSize(used),
+                Vfs.humanSize(vfs().freeSpace(cwd)), driveOf(cwd)));
+    }
+
+    /** The drive a path sits on, for df to name. */
+    private static String driveOf(String path) {
+        String p = Vfs.normalize(path);
+        while (!Vfs.isDrive(p) && !Vfs.isRoot(p)) {
+            p = Vfs.parent(p);
+        }
+        return p;
+    }
+
     private void neofetch() {
         String[] facts = {
             "  " + shell.settings().userName() + "@javaos",
@@ -270,7 +293,7 @@ public class TerminalApp extends AppWindow {
                     + System.getProperty("os.arch"),
             "  Shell    javash",
             "  WM       JDesktopPane",
-            "  Volume   " + Vfs.humanSize(vfs().usedBytes()) + " used",
+            "  Disk     " + Vfs.humanSize(vfs().freeSpace(cwd)) + " free",
             "  Windows  " + shell.pane().getAllFrames().length + " open",
         };
         String[] art = {

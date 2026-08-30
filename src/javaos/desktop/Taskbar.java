@@ -16,7 +16,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import javax.swing.BorderFactory;
-import javax.swing.Icon;
 import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
@@ -29,7 +28,6 @@ import javax.swing.event.InternalFrameEvent;
 
 import javaos.Settings;
 import javaos.apps.AppWindow;
-import javaos.ui.Icons;
 import javaos.sys.Machine;
 import javaos.ui.JavaLogo;
 import javaos.ui.Ui;
@@ -60,20 +58,17 @@ public class Taskbar extends JPanel {
         launchButton = new LaunchButton();
         launchButton.addActionListener(e -> menu.show(launchButton, 0, -menu.height()));
 
-        JPanel quick = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 2, 0));
-        quick.setOpaque(false);
-        quick.setBorder(BorderFactory.createEmptyBorder(3, 6, 2, 0));
-        quick.add(new Separator());
-        quick.add(quickLaunch("filemanager", Icons.folderOpen(18), "File Manager"));
-        quick.add(quickLaunch("writer", Icons.textDocument(18), "Writer"));
-        quick.add(quickLaunch("calc", Icons.spreadsheet(18), "Calc"));
-        quick.add(quickLaunch("terminal", Icons.terminal(18), "Terminal"));
-        quick.add(new Separator());
+        // No quick starters any more: the Launch menu is the only way in, so
+        // the button runs straight into the window list with a rule between.
+        JPanel gap = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 2, 0));
+        gap.setOpaque(false);
+        gap.setBorder(BorderFactory.createEmptyBorder(3, 6, 2, 0));
+        gap.add(new Separator());
 
         JPanel left = new JPanel(new BorderLayout());
         left.setOpaque(false);
         left.add(launchButton, BorderLayout.WEST);
-        left.add(quick, BorderLayout.CENTER);
+        left.add(gap, BorderLayout.CENTER);
 
         windowList.setOpaque(false);
         JPanel middle = new JPanel(new BorderLayout());
@@ -145,16 +140,6 @@ public class Taskbar extends JPanel {
                 + (settings.clock24h() ? "" : " a");
         clock.setText(new SimpleDateFormat(pattern).format(new Date()));
         clock.setToolTipText(new SimpleDateFormat("EEEE, d MMMM yyyy").format(new Date()));
-    }
-
-    private JButton quickLaunch(String appId, Icon icon, String tip) {
-        JButton b = new JButton(icon);
-        b.setToolTipText(tip);
-        b.setPreferredSize(new Dimension(28, 28));
-        b.setMargin(new java.awt.Insets(0, 0, 0, 0));
-        b.setFocusPainted(false);
-        b.addActionListener(e -> shell.launch(appId));
-        return b;
     }
 
     // ---- window list ---------------------------------------------------

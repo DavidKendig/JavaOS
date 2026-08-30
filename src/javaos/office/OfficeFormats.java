@@ -36,10 +36,6 @@ public final class OfficeFormats {
         return SHEET_FORMATS.contains(extension.toLowerCase(Locale.ROOT));
     }
 
-    public static boolean isOfficeFormat(String extension) {
-        return isTextFormat(extension) || isSheetFormat(extension);
-    }
-
     public static TextDocument readText(Path file) throws IOException {
         checkPackage(file);
         return switch (extensionOf(file)) {
