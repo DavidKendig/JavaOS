@@ -2,6 +2,7 @@ package javaos.office;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -141,7 +142,29 @@ public final class Odf {
                 .attr("xmlns:text", Xml.TEXT)
                 .attr("xmlns:style", Xml.STYLE)
                 .attr("xmlns:fo", Xml.FO)
+                .attr("xmlns:svg", Xml.SVG)
                 .attr("office:version", VERSION);
+
+        // Every font a style names has to be declared here first. ODF says
+        // style:font-name refers to one of these, and LibreOffice enforces it
+        // by quietly discarding a reference to a face that was never declared
+        // -- which loses the font on any conversion it performs.
+        List<String> fonts = new ArrayList<>();
+        for (Format format : runStyles.keySet()) {
+            if (format.font() != null && !fonts.contains(format.font())) {
+                fonts.add(format.font());
+            }
+        }
+        if (!fonts.isEmpty()) {
+            xml.start("office:font-face-decls");
+            for (String font : fonts) {
+                xml.start("style:font-face")
+                        .attr("style:name", font)
+                        .attr("svg:font-family", quoteFontFamily(font))
+                        .end();
+            }
+            xml.end();
+        }
 
         xml.start("office:automatic-styles");
         for (Map.Entry<Align, String> entry : paragraphStyles.entrySet()) {
@@ -173,7 +196,10 @@ public final class Odf {
                         .attr("style:text-underline-color", "font-color");
             }
             if (format.font() != null) {
-                xml.attr("style:font-name", format.font());
+                // Both spellings: the reference for readers that follow the
+                // declarations, and the literal family for those that do not.
+                xml.attr("style:font-name", format.font())
+                        .attr("fo:font-family", quoteFontFamily(format.font()));
             }
             if (format.sizePt() > 0) {
                 xml.attr("fo:font-size", format.sizePt() + "pt");
@@ -278,7 +304,7 @@ public final class Odf {
             List<Element> cells = Xml.children(rowElement);
             boolean rowHasContent = false;
             for (Element cell : cells) {
-                if (!Xml.textOf(cell).isBlank()
+                if (!cellText(cell).isBlank()
                         || Xml.attr(cell, Xml.TABLE, "formula") != null
                         || Xml.attr(cell, Xml.OFFICE, "value") != null) {
                     rowHasContent = true;
@@ -318,7 +344,7 @@ public final class Odf {
             String formula = Xml.attr(cell, Xml.TABLE, "formula");
             String valueType = Xml.attr(cell, Xml.OFFICE, "value-type");
             String value = Xml.attr(cell, Xml.OFFICE, "value");
-            String display = Xml.textOf(cell);
+            String display = cellText(cell);
 
             String raw;
             String cached = null;
@@ -397,18 +423,19 @@ public final class Odf {
                         xml.attr("office:value-type", "string");
                     }
                     if (!cached.isEmpty()) {
-                        xml.start("text:p").text(cached).end();
+                        xml.start("text:p").raw(encodeText(cached)).end();
                     }
                 } else {
                     Double number = SheetDocument.asNumber(raw);
                     if (number != null) {
                         xml.attr("office:value-type", "float")
                                 .attr("office:value", SheetDocument.plainNumber(number));
-                        xml.start("text:p").text(raw).end();
                     } else {
                         xml.attr("office:value-type", "string");
-                        xml.start("text:p").text(raw).end();
                     }
+                    // encodeText, not text: ODF cannot hold a run of spaces or a
+                    // tab literally, and writing one loses it on the way back.
+                    xml.start("text:p").raw(encodeText(raw)).end();
                 }
                 xml.end();
             }
@@ -547,7 +574,7 @@ public final class Odf {
                 if (font == null) {
                     font = Xml.attr(text, Xml.FO, "font-family");
                 }
-                info.font = font;
+                info.font = unquoteFontFamily(font);
                 String size = Xml.attr(text, Xml.FO, "font-size");
                 if (size != null && size.endsWith("pt")) {
                     try {
@@ -637,6 +664,68 @@ public final class Odf {
         return merged;
     }
 
+    /**
+     * A font name as {@code fo:font-family} spells it, which is CSS's spelling:
+     * anything but a bare identifier has to be quoted, so "Times New Roman"
+     * travels as {@code 'Times New Roman'}.
+     */
+    private static String quoteFontFamily(String font) {
+        return font.matches("[A-Za-z0-9_-]+") ? font : "'" + font.replace("'", "") + "'";
+    }
+
+    /**
+     * The reverse, and the reason the reader needs it: LibreOffice writes the
+     * quoted form, so a font read straight out of one of its files would
+     * otherwise arrive with the quotes still attached and be offered to the
+     * user as a font called {@code 'Times New Roman'}. A list of families is
+     * reduced to the first, which is the one that would be used.
+     */
+    private static String unquoteFontFamily(String value) {
+        if (value == null) {
+            return null;
+        }
+        String first = value.split(",")[0].strip();
+        if (first.length() >= 2
+                && (first.startsWith("'") && first.endsWith("'")
+                        || first.startsWith("\"") && first.endsWith("\""))) {
+            first = first.substring(1, first.length() - 1).strip();
+        }
+        return first.isEmpty() ? null : first;
+    }
+
+    /**
+     * The text of a cell, with ODF's whitespace markers put back.
+     *
+     * <p>{@link Xml#textOf} collects text nodes and nothing else, which is
+     * wrong here: ODF cannot store a run of spaces literally, so it writes the
+     * first and encodes the rest as {@code <text:s text:c="n"/>}, and tabs as
+     * {@code <text:tab/>}. Reading the text nodes alone silently shortens
+     * every run of spaces in a spreadsheet to one.
+     */
+    private static String cellText(Node node) {
+        StringBuilder text = new StringBuilder();
+        NodeList children = node.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node child = children.item(i);
+            if (child.getNodeType() == Node.TEXT_NODE
+                    || child.getNodeType() == Node.CDATA_SECTION_NODE) {
+                text.append(child.getNodeValue());
+            } else if (child instanceof Element element) {
+                if (Xml.matches(element, Xml.TEXT, "s")) {
+                    int count = Xml.intAttr(element, Xml.TEXT, "c", 1);
+                    text.append(" ".repeat(Math.max(1, Math.min(count, 1000))));
+                } else if (Xml.matches(element, Xml.TEXT, "tab")) {
+                    text.append('\t');
+                } else if (Xml.matches(element, Xml.TEXT, "line-break")) {
+                    text.append('\n');
+                } else {
+                    text.append(cellText(element));
+                }
+            }
+        }
+        return text.toString();
+    }
+
     private static Align alignFromOdf(String value) {
         if (value == null) {
             return null;
@@ -650,12 +739,23 @@ public final class Odf {
         };
     }
 
+    /**
+     * The absolute spelling, not the writing-direction-relative one.
+     *
+     * <p>ODF allows both: {@code start} and {@code end} follow the text
+     * direction, {@code left} and {@code right} do not. LibreOffice writes the
+     * absolute pair, and -- although the relative pair is equally valid -- its
+     * ODF import quietly drops {@code end}, so a right-aligned paragraph
+     * written that way came back left-aligned from any conversion it did. We
+     * write what it reads. {@link #alignFromOdf} still accepts all four, so
+     * files written the old way are unaffected.
+     */
     private static String alignToOdf(Align align) {
         return switch (align) {
             case CENTER -> "center";
-            case RIGHT -> "end";
+            case RIGHT -> "right";
             case JUSTIFY -> "justify";
-            default -> "start";
+            default -> "left";
         };
     }
 

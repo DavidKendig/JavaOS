@@ -36,6 +36,10 @@ public final class Xml {
     /** The formula namespace. A table:formula whose of: prefix is undeclared is junk. */
     public static final String OF = "urn:oasis:names:tc:opendocument:xmlns:of:1.2";
 
+    /** Where ODF keeps the font declarations {@code style:font-name} points at. */
+    public static final String SVG =
+            "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0";
+
     // OOXML
     public static final String W =
             "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
