@@ -40,7 +40,7 @@ public class AboutApp extends AppWindow {
                   Toolkit     Metal look and feel, %s theme
                   Host        %s %s
                   Heap        %s of %s
-                  Volume      %s
+                  Home        %s
                   User        %s
 
                 Duke is drawn in Java2D; the Java logo is the official
@@ -52,7 +52,7 @@ public class AboutApp extends AppWindow {
                 System.getProperty("os.name"), System.getProperty("os.arch"),
                 javaos.vfs.Vfs.humanSize(rt.totalMemory() - rt.freeMemory()),
                 javaos.vfs.Vfs.humanSize(rt.maxMemory()),
-                shell.vfs().realRoot().toString(),
+                shell.vfs().host(javaos.vfs.Vfs.HOME).toString(),
                 shell.settings().userName()));
         details.setEditable(false);
         details.setFont(new Font("Monospaced", Font.PLAIN, 11));

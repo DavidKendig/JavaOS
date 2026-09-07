@@ -27,6 +27,18 @@ mapfile -t sources < <(find src -name '*.java')
 echo "Compiling ${#sources[@]} source files..."
 javac -d out "${sources[@]}"
 
+# Anything under src that is not source is a resource -- the wallpaper images,
+# today -- and has to reach out/ in the same place, or getResourceAsStream will
+# not find it in the jar.
+mapfile -t resources < <(cd src && find . -type f ! -name '*.java')
+if [ "${#resources[@]}" -gt 0 ]; then
+    echo "Copying ${#resources[@]} resource files..."
+    for resource in "${resources[@]}"; do
+        mkdir -p "out/$(dirname "$resource")"
+        cp "src/$resource" "out/$resource"
+    done
+fi
+
 jar_tool=$(find_tool jar)
 if [ -z "$jar_tool" ]; then
     echo "Compiled to out/. (jar was not found, so no jar was packaged.)"

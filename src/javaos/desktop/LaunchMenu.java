@@ -71,6 +71,10 @@ public class LaunchMenu extends JPopupMenu {
         addSeparator();
         add(documentsMenu());
 
+        JMenuItem computer = new JMenuItem("My Computer", Icons.computer(16));
+        computer.addActionListener(e -> shell.launch("filemanager", Vfs.ROOT));
+        add(computer);
+
         JMenuItem home = new JMenuItem("Home Folder", Icons.folderOpen(16));
         home.addActionListener(e -> shell.launch("filemanager", Vfs.HOME));
         add(home);
@@ -100,7 +104,7 @@ public class LaunchMenu extends JPopupMenu {
     private JMenu documentsMenu() {
         JMenu documents = new JMenu("Documents");
         documents.setIcon(Icons.document(16));
-        String dir = Vfs.HOME + "/Documents";
+        String dir = shell.vfs().firstDirectory(Vfs.HOME + "/Documents");
         List<String> files = shell.vfs().exists(dir) ? shell.vfs().list(dir) : List.of();
         if (files.isEmpty()) {
             JMenuItem empty = new JMenuItem("(empty)");

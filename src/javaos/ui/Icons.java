@@ -626,4 +626,103 @@ public final class Icons {
             g.fill(head);
         });
     }
+
+    // ---- the office suite tiles ----------------------------------------
+
+    /**
+     * The office application tiles: a glossy rounded square with a white wave
+     * down the left edge and the application letter on the right, in the shape
+     * of the store tile the desktop was modelled on.
+     *
+     * <p>The colours are each suite's own, but the artwork is drawn here, like
+     * every other icon on this desktop. Pasting Microsoft's real Word, Excel,
+     * PowerPoint and Access glyphs in would be putting someone else's trademark
+     * on a system that has never shipped a bitmap -- the same line
+     * {@link #mediaVlc} draws with VLC's cone.
+     */
+    private static void suiteTile(Graphics2D g, Color light, Color dark, String letter) {
+        RoundRectangle2D tile = new RoundRectangle2D.Double(2, 2, 28, 28, 7, 7);
+        g.setPaint(new java.awt.GradientPaint(0, 2, light, 0, 30, dark));
+        g.fill(tile);
+
+        // The wave: two mirrored curves down the left third, as on the tile.
+        java.awt.Shape clip = g.getClip();
+        g.clip(tile);
+        GeneralPath wave = new GeneralPath();
+        wave.moveTo(11, 2);
+        wave.curveTo(6, 9, 14, 15, 10, 21);
+        wave.curveTo(8, 25, 8, 28, 9, 30);
+        g.setColor(new Color(255, 255, 255, 150));
+        g.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.draw(wave);
+
+        // The gloss: a highlight across the top, fading out by the middle.
+        g.setPaint(new java.awt.GradientPaint(0, 3, new Color(255, 255, 255, 90),
+                0, 17, new Color(255, 255, 255, 0)));
+        g.fill(new RoundRectangle2D.Double(3, 3, 26, 14, 6, 6));
+        g.setClip(clip);
+
+        g.setColor(new Color(255, 255, 255, 230));
+        g.setStroke(new BasicStroke(1.6f));
+        g.draw(tile);
+
+        g.setFont(new Font("SansSerif", Font.BOLD, 17));
+        int width = g.getFontMetrics().stringWidth(letter);
+        g.setColor(new Color(0, 0, 0, 70));
+        g.drawString(letter, 20 - width / 2 + 1, 23);
+        g.setColor(Color.WHITE);
+        g.drawString(letter, 20 - width / 2, 22);
+    }
+
+    public static Icon officeWord(int size) {
+        return of(size, g -> suiteTile(g, new Color(0x2B, 0x7C, 0xD3),
+                new Color(0x10, 0x3F, 0x91), "W"));
+    }
+
+    public static Icon officeExcel(int size) {
+        return of(size, g -> suiteTile(g, new Color(0x33, 0xB6, 0x74),
+                new Color(0x0E, 0x6B, 0x38), "X"));
+    }
+
+    public static Icon officePowerPoint(int size) {
+        return of(size, g -> suiteTile(g, new Color(0xF2, 0x7B, 0x52),
+                new Color(0xB8, 0x35, 0x16), "P"));
+    }
+
+    public static Icon officeAccess(int size) {
+        return of(size, g -> suiteTile(g, new Color(0xCE, 0x51, 0x4E),
+                new Color(0x93, 0x2F, 0x32), "A"));
+    }
+
+    /**
+     * The office hand-over mark: a document with an arrow leaving it, shown
+     * wherever JavaOS is about to start somebody else's suite instead of its own
+     * editor.
+     */
+    public static Icon officeHandover(int size) {
+        return of(size, g -> {
+            GeneralPath sheet = new GeneralPath();
+            sheet.moveTo(5, 3);
+            sheet.lineTo(15, 3);
+            sheet.lineTo(20, 8);
+            sheet.lineTo(20, 29);
+            sheet.lineTo(5, 29);
+            sheet.closePath();
+            outline(g, sheet, PAPER, INK);
+            g.setColor(STEEL);
+            g.setStroke(new BasicStroke(1.4f));
+            for (int i = 0; i < 4; i++) {
+                g.drawLine(8, 14 + i * 4, 17, 14 + i * 4);
+            }
+            g.setColor(BLUE);
+            g.setStroke(new BasicStroke(2.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.drawLine(21, 12, 28, 5);
+            GeneralPath head = new GeneralPath();
+            head.moveTo(30, 3);
+            head.lineTo(30, 11);
+            head.lineTo(22, 3);
+            head.closePath();
+            g.fill(head);
+        });
+    }
 }

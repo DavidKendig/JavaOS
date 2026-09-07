@@ -124,20 +124,6 @@ public final class SheetDocument {
         cached.set(row, column, value);
     }
 
-    /** What a reader should display: the cached result for formulas, else the text. */
-    public String displayValue(int row, int column) {
-        String raw = get(row, column);
-        if (raw.startsWith("=")) {
-            String value = cachedValue(row, column);
-            return value.isEmpty() ? "" : value;
-        }
-        return raw;
-    }
-
-    public boolean isFormula(int row, int column) {
-        return get(row, column).startsWith("=");
-    }
-
     /** Drops trailing empty rows left behind by generous producers. */
     public void trim() {
         content.trim();

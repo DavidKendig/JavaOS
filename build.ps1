@@ -30,6 +30,22 @@ Write-Host "Compiling $($sources.Count) source files..."
 & javac -d $out $sources
 if ($LASTEXITCODE -ne 0) { throw "compilation failed" }
 
+# Anything under src that is not source is a resource -- the wallpaper images,
+# today -- and has to reach out\ in the same place, or getResourceAsStream
+# will not find it in the jar.
+$srcRoot = Join-Path $root "src"
+$resources = Get-ChildItem -Path $srcRoot -Recurse -File |
+    Where-Object { $_.Extension -ne ".java" }
+if ($resources) {
+    Write-Host "Copying $($resources.Count) resource files..."
+    foreach ($resource in $resources) {
+        $relative = $resource.FullName.Substring($srcRoot.Length + 1)
+        $destination = Join-Path $out $relative
+        New-Item -ItemType Directory -Force (Split-Path $destination) | Out-Null
+        Copy-Item $resource.FullName $destination -Force
+    }
+}
+
 $jar = Resolve-JdkTool "jar"
 if (-not $jar) {
     Write-Host "Compiled to $out. (jar was not found, so no jar was packaged.)"

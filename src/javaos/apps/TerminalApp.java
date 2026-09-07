@@ -2,11 +2,17 @@ package javaos.apps;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.EventQueue;
 import java.awt.Font;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.List;
 
 import javax.swing.BorderFactory;
@@ -17,28 +23,60 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 
 import javaos.desktop.Shell;
+import javaos.sys.HostShell;
 import javaos.ui.Icons;
 import javaos.vfs.Vfs;
 
-/** A shell over the volume: green on black, forty commands, no actual kernel. */
+/**
+ * A terminal: green on black, and a real PowerShell underneath.
+ *
+ * <p>This window used to be a simulation -- forty commands reimplemented in
+ * Java over the file system, which looked like a shell and behaved like one
+ * only for as long as you stayed inside the forty. It now runs a persistent
+ * {@link HostShell}, so what you type is what the host's own interpreter
+ * receives, and everything the machine can do it can do: pipelines, modules,
+ * {@code git}, {@code winget}, the user's own profile functions.
+ *
+ * <p>Six commands are still answered here rather than sent, and all six are
+ * about this window rather than the machine: {@code clear} and {@code exit},
+ * whose console meanings do not survive a pipe; {@code edit}, {@code apps} and
+ * {@code launch}, which reach into the desktop; and {@code javaos}, which
+ * explains the arrangement. A line beginning with a backslash skips the lot and
+ * goes straight to the shell.
+ */
 public class TerminalApp extends AppWindow {
 
     private static final Color SCREEN = new Color(0x10, 0x14, 0x10);
     private static final Color PHOSPHOR = new Color(0x7C, 0xE8, 0x7C);
+
+    /** Enough scrollback to read, little enough that a recursive listing cannot eat the heap. */
+    private static final int SCROLLBACK = 400_000;
 
     private final JTextArea output = new JTextArea();
     private final JTextField input = new JTextField();
     private final JLabel prompt = new JLabel();
     private final List<String> history = new ArrayList<>();
 
-    private String cwd;
+    /**
+     * Lines typed before the shell drew its first prompt. An interpreter takes
+     * a fraction of a second to start, and anything sent in that window would
+     * reach it as bare standard input rather than as a command -- it would run,
+     * but unframed, so its output would arrive around the prompt instead of
+     * before it. They wait here instead of being dropped.
+     */
+    private final Deque<String> queued = new ArrayDeque<>();
+
+    private HostShell host;
+    private String hostCwd;
+    private boolean started;
     private int historyCursor;
+
+    /** Counts the shells this window has started, so stale callbacks can be told apart. */
+    private int generation;
 
     public TerminalApp(Shell shell, String argument) {
         super(shell, "Terminal", Icons.terminal(16));
-        setSize(680, 430);
-        this.cwd = argument != null && vfs().isDirectory(argument)
-                ? Vfs.normalize(argument) : Vfs.HOME;
+        setSize(760, 470);
 
         Font mono = new Font("Monospaced", Font.PLAIN, 13);
         output.setEditable(false);
@@ -70,6 +108,10 @@ public class TerminalApp extends AppWindow {
                     recall(1);
                 } else if (e.getKeyCode() == KeyEvent.VK_L && e.isControlDown()) {
                     output.setText("");
+                } else if (e.getKeyCode() == KeyEvent.VK_C && e.isControlDown()
+                        && input.getSelectedText() == null) {
+                    e.consume();
+                    cancel();
                 }
             }
         });
@@ -89,29 +131,155 @@ public class TerminalApp extends AppWindow {
         screen.setBorder(javaos.ui.Ui.sunkenPanel());
         setBody(screen);
 
-        print(javaos.Version.NAME + " Terminal " + javaos.Version.NUMBER + "   (type 'help' for commands)");
-        print("");
-        if (vfs().exists("/etc/motd")) {
-            print(vfs().read("/etc/motd").strip());
-            print("");
+        print(javaos.Version.NAME + " Terminal " + javaos.Version.NUMBER
+                + "   (type 'javaos' for the window's own commands)\n");
+        start(startingDirectory(argument));
+        EventQueue.invokeLater(input::requestFocusInWindow);
+    }
+
+    /** Where "Terminal Here" wants us, or the user's home when it asked for nowhere. */
+    private File startingDirectory(String argument) {
+        Path candidate = null;
+        if (argument != null && vfs().isDirectory(argument)) {
+            try {
+                candidate = vfs().host(argument);
+            } catch (RuntimeException ignored) {
+                // My Computer has no host directory; home will do.
+            }
+        }
+        return HostShell.directoryOrHome(candidate);
+    }
+
+    // ---- the shell underneath ------------------------------------------
+
+    /**
+     * Starts an interpreter, replacing any that is already running.
+     *
+     * <p>The directory is checked rather than trusted, because the shell's own
+     * idea of where it is need not be a folder at all: {@code cd HKLM:} leaves
+     * PowerShell somewhere perfectly valid that nothing can be launched in.
+     */
+    private void start(File directory) {
+        if (host != null) {
+            host.close();
+        }
+        File where = directory != null && directory.isDirectory()
+                ? directory : new File(System.getProperty("user.home", "."));
+        hostCwd = where.getPath();
+        started = false;
+        queued.clear();
+        refreshPrompt();
+        // Every callback carries the number of the shell that raised it. The
+        // outgoing shell's last words are already on the event queue by the
+        // time its replacement starts, and without this they would land on the
+        // new one -- reporting the old directory, or freeing a prompt that the
+        // new shell has not offered yet.
+        int mine = ++generation;
+        try {
+            host = new HostShell(where, new HostShell.Listener() {
+                @Override public void output(String text) {
+                    EventQueue.invokeLater(() -> {
+                        if (mine == generation) {
+                            append(text);
+                        }
+                    });
+                }
+
+                // Qualified, because an unqualified ready() here would find
+                // this listener's own method rather than the window's.
+                @Override public void ready(String at, boolean ok, int exitCode) {
+                    EventQueue.invokeLater(() -> {
+                        if (mine == generation) {
+                            TerminalApp.this.ready(at, ok, exitCode);
+                        }
+                    });
+                }
+
+                @Override public void ended(String reason) {
+                    EventQueue.invokeLater(() -> {
+                        if (mine != generation) {
+                            return;
+                        }
+                        print("\n[" + reason + " -- Ctrl+C starts a new one]");
+                        prompt.setText("");
+                        status("the shell has stopped");
+                    });
+                }
+            });
+            print("Connected to " + host.name() + ". Commands go straight to it.\n");
+        } catch (IOException e) {
+            host = null;
+            print("Could not start a shell: " + e.getMessage());
+            status("no shell");
+        }
+    }
+
+    /** The prompt has come back: note where the shell now is, and how it fared. */
+    private void ready(String workingDirectory, boolean succeeded, int exitCode) {
+        started = true;
+        if (workingDirectory != null && !workingDirectory.isBlank()) {
+            hostCwd = workingDirectory;
         }
         refreshPrompt();
-        java.awt.EventQueue.invokeLater(input::requestFocusInWindow);
+        if (!succeeded) {
+            // The exit code belongs to the last program, not necessarily to
+            // this command, so it is only worth showing when there is one.
+            status(hostCwd + "    failed" + (exitCode == 0 ? "" : " (exit " + exitCode + ")"));
+        }
+        if (!queued.isEmpty() && host != null && !host.isBusy()) {
+            run(queued.poll());
+            refreshPrompt();
+        }
+    }
+
+    /**
+     * Stops whatever is running. There is no way to deliver a console Ctrl+C to
+     * a child whose standard input is a pipe, so this ends the interpreter and
+     * starts a fresh one in the same folder -- the command dies, at the cost of
+     * the session's variables. It is also the way back from a shell that has
+     * stopped on its own, after {@code exit} or a crash. When there is a live
+     * shell sitting idle, it only clears the line, as a console would.
+     */
+    private void cancel() {
+        if (host != null && host.isBusy()) {
+            print("^C");
+            start(new File(hostCwd));
+        } else if (host == null || !host.isAlive()) {
+            start(new File(hostCwd));
+        } else {
+            input.setText("");
+        }
     }
 
     private void refreshPrompt() {
-        prompt.setText(shell.settings().userName() + "@javaos:" + shortCwd() + "$ ");
-        status(cwd);
-        setTitle(Vfs.name(cwd) + " - Terminal");
+        boolean busy = host != null && host.isBusy();
+        prompt.setText(busy ? "" : "PS " + hostCwd + "> ");
+        status(hostCwd);
+        setTitle(new File(hostCwd).getName() + " - Terminal");
     }
 
-    private String shortCwd() {
-        return cwd.startsWith(Vfs.HOME) ? "~" + cwd.substring(Vfs.HOME.length()) : cwd;
+    // ---- the screen ----------------------------------------------------
+
+    /** Appends a chunk of shell output, trimming the scrollback when it grows. */
+    private void append(String text) {
+        output.append(text);
+        int length = output.getDocument().getLength();
+        if (length > SCROLLBACK) {
+            output.replaceRange("", 0, length - SCROLLBACK);
+        }
+        output.setCaretPosition(output.getDocument().getLength());
     }
 
     private void print(String text) {
-        output.append(text + "\n");
-        output.setCaretPosition(output.getDocument().getLength());
+        append(text + "\n");
+    }
+
+    /** Adds a command to the history Up and Down walk, ignoring empty lines. */
+    private void remember(String line) {
+        if (!line.isBlank()) {
+            history.add(line);
+        }
+        historyCursor = history.size();
     }
 
     private void recall(int direction) {
@@ -122,282 +290,134 @@ public class TerminalApp extends AppWindow {
         input.setText(historyCursor < history.size() ? history.get(historyCursor) : "");
     }
 
+    /**
+     * Enter. While a command is running the line is stdin -- what Read-Host and
+     * every prompting program is waiting for -- and only when the prompt is
+     * free is it a command.
+     */
     private void submit() {
         String line = input.getText();
         input.setText("");
-        print(prompt.getText() + line);
-        if (!line.isBlank()) {
-            history.add(line);
-            historyCursor = history.size();
-            try {
-                run(line.trim());
-            } catch (RuntimeException e) {
-                print("error: " + (e.getMessage() == null ? e.toString() : e.getMessage()));
-            }
+        if (host == null || !host.isAlive()) {
+            print("no shell is running. Ctrl+C starts one.");
+            return;
         }
+        if (!started) {
+            print(line);
+            remember(line);
+            queued.add(line);
+            return;
+        }
+        if (host.isBusy()) {
+            print(line);
+            host.write(line + "\n");
+            return;
+        }
+        print(prompt.getText() + line);
+        remember(line);
+        run(line);
         refreshPrompt();
     }
 
-    // ---- commands ------------------------------------------------------
+    // ---- the six commands this window keeps ----------------------------
 
+    /**
+     * A guard around the built-ins. They reach into the file system and the
+     * desktop, either of which can refuse -- an unwritable folder, a working
+     * directory the shell is happy with but Java cannot spell, such as the one
+     * {@code cd Cert:} leaves behind. A terminal reports that on its own screen;
+     * letting it out would put a stack trace on the desktop instead, and skip
+     * the prompt that should follow.
+     */
     private void run(String line) {
-        List<String> parts = tokenize(line);
-        String command = parts.get(0);
-        List<String> args = parts.subList(1, parts.size());
-        String first = args.isEmpty() ? null : args.get(0);
+        try {
+            dispatch(line);
+        } catch (RuntimeException e) {
+            print("error: " + (e.getMessage() == null ? e.toString() : e.getMessage()));
+        }
+    }
+
+    private void dispatch(String line) {
+        String trimmed = line.strip();
+        if (trimmed.startsWith("\\")) {
+            // The escape hatch: send it even if it names one of ours.
+            host.send(trimmed.substring(1));
+            return;
+        }
+        List<String> parts = tokenize(trimmed);
+        String command = parts.get(0).toLowerCase();
+        String first = parts.size() > 1 ? parts.get(1) : null;
 
         switch (command) {
-            case "help" -> printHelp();
-            case "ls", "dir" -> list(first == null ? cwd : resolve(first));
-            case "cd" -> changeDirectory(first);
-            case "pwd" -> print(cwd);
-            case "cat", "type" -> requireFile(first, path -> print(vfs().read(path).stripTrailing()));
-            case "head" -> requireFile(first, path -> lines(path, 10, true));
-            case "tail" -> requireFile(first, path -> lines(path, 10, false));
-            case "wc" -> requireFile(first, path -> {
-                String text = vfs().read(path);
-                print(text.lines().count() + " lines, "
-                        + text.split("\\s+").length + " words, "
-                        + text.length() + " chars   " + Vfs.name(path));
-            });
-            case "grep" -> grep(args);
-            case "echo" -> print(String.join(" ", args));
-            case "mkdir" -> {
-                require(first, "mkdir <folder>");
-                vfs().mkdirs(resolve(first));
-                print("created " + resolve(first));
-            }
-            case "touch" -> {
-                require(first, "touch <file>");
-                vfs().touch(resolve(first));
-            }
-            case "rm", "del" -> {
-                require(first, "rm <path>");
-                String path = resolve(first);
-                if (!vfs().exists(path)) {
-                    print("rm: no such file: " + first);
-                } else {
-                    vfs().delete(path);
-                    print("removed " + path);
-                }
-            }
-            case "cp" -> {
-                requireTwo(args, "cp <source> <target>");
-                vfs().copy(resolve(args.get(0)), resolve(args.get(1)));
-                print("copied");
-            }
-            case "mv" -> {
-                requireTwo(args, "mv <source> <target>");
-                vfs().move(resolve(args.get(0)), resolve(args.get(1)));
-                print("moved");
-            }
-            case "tree" -> tree(first == null ? cwd : resolve(first), "", 0);
-            case "edit", "open" -> {
-                require(first, command + " <path>");
-                String path = resolve(first);
-                if (!vfs().exists(path)) {
-                    vfs().write(path, "");
-                }
-                shell.openFile(path);
-                print("opening " + Vfs.name(path) + "...");
-            }
-            case "run" -> {
-                require(first, "run <application-id>");
-                if (shell.launch(first) == null) {
-                    print("no such application: " + first);
-                }
-            }
+            case "clear", "cls" -> output.setText("");
+            case "exit", "logout" -> doDefaultCloseAction();
+            case "javaos" -> printHelp();
             case "apps" -> {
                 for (App app : shell.apps()) {
                     print(String.format("  %-14s %s", app.id(), app.description()));
                 }
             }
-            case "ps" -> {
-                javax.swing.JInternalFrame[] frames = shell.pane().getAllFrames();
-                print(String.format("  %-5s %-28s %s", "PID", "WINDOW", "STATE"));
-                int pid = 100;
-                for (javax.swing.JInternalFrame frame : frames) {
-                    print(String.format("  %-5d %-28s %s", pid++, frame.getTitle(),
-                            frame.isIcon() ? "minimised" : "running"));
+            case "launch" -> {
+                if (first == null) {
+                    print("usage: launch <application-id>   (see 'apps')");
+                } else if (shell.launch(first) == null) {
+                    print("no such application: " + first);
                 }
             }
-            case "df" -> print("Volume " + vfs().realRoot() + "\n  used "
-                    + Vfs.humanSize(vfs().usedBytes()));
-            case "free" -> {
-                Runtime rt = Runtime.getRuntime();
-                print("  heap used  " + Vfs.humanSize(rt.totalMemory() - rt.freeMemory()));
-                print("  heap total " + Vfs.humanSize(rt.totalMemory()));
-                print("  heap max   " + Vfs.humanSize(rt.maxMemory()));
-            }
-            case "date" -> print(new java.util.Date().toString());
-            case "whoami" -> print(shell.settings().userName());
-            case "uname" -> print(javaos.Version.FULL + " (Swing " + System.getProperty("java.version")
-                    + ") on " + System.getProperty("os.name"));
-            case "neofetch" -> neofetch();
-            case "motd" -> print(vfs().exists("/etc/motd") ? vfs().read("/etc/motd").strip()
-                    : "no message today");
-            case "history" -> {
-                for (int i = 0; i < history.size(); i++) {
-                    print(String.format("  %3d  %s", i + 1, history.get(i)));
-                }
-            }
-            case "clear", "cls" -> output.setText("");
-            case "sudo" -> print("You are already the only user on this machine.");
-            case "java" -> print("Write once, run anywhere. Even here.");
-            case "exit", "logout" -> doDefaultCloseAction();
-            default -> print(command + ": command not found. Try 'help'.");
+            case "edit" -> edit(first);
+            default -> host.send(line);
         }
+    }
+
+    /** Opens a file in whichever JavaOS application claims it. */
+    private void edit(String argument) {
+        if (argument == null) {
+            print("usage: edit <path>");
+            return;
+        }
+        String here;
+        try {
+            here = Vfs.toVirtual(new File(hostCwd).toPath());
+        } catch (RuntimeException e) {
+            // The shell is somewhere with no file system behind it, after a
+            // cd into the registry or the certificate store.
+            print("edit: " + hostCwd + " is not a folder; give a full path");
+            return;
+        }
+        String path = Vfs.resolve(here, argument);
+        if (!vfs().exists(path)) {
+            vfs().write(path, "");
+        }
+        shell.openFile(path);
+        print("opening " + Vfs.name(path) + "...");
     }
 
     private void printHelp() {
         print("""
-              Files      ls  cd  pwd  cat  head  tail  wc  grep  tree
-                         mkdir  touch  rm  cp  mv  edit  open
-              System     apps  run  ps  df  free  date  whoami  uname
-                         neofetch  motd  history  clear  exit
-              Shortcuts  Up/Down recall history, Ctrl+L clears the screen
+              Everything you type goes to the host shell. These six do not:
+
+                clear, cls    clear this screen
+                exit, logout  close the window
+                javaos        this list
+                apps          the applications the desktop can launch
+                launch <id>   launch one of them
+                edit <path>   open a file in a JavaOS application
+
+              Prefix a line with \\ to send it to the shell regardless.
+              Up and Down recall history, Ctrl+L clears the screen, and
+              Ctrl+C stops a running command by restarting the shell.
+              While a command runs, what you type is fed to its input.
               """.stripTrailing());
-    }
-
-    private void neofetch() {
-        String[] facts = {
-            "  " + shell.settings().userName() + "@javaos",
-            "  ------------------",
-            "  OS       " + javaos.Version.FULL + " (Metal, " + shell.settings().theme().label + " theme)",
-            "  Kernel   " + System.getProperty("java.vm.name"),
-            "  Java     " + System.getProperty("java.version"),
-            "  Host     " + System.getProperty("os.name") + " "
-                    + System.getProperty("os.arch"),
-            "  Shell    javash",
-            "  WM       JDesktopPane",
-            "  Volume   " + Vfs.humanSize(vfs().usedBytes()) + " used",
-            "  Windows  " + shell.pane().getAllFrames().length + " open",
-        };
-        String[] art = {
-            "      .-\"\"\"-.  ",
-            "     /  o o  \\ ",
-            "    |    ^    |",
-            "    |  \\___/  |",
-            "     \\       / ",
-            "      '.___.'  ",
-            "     duke says ",
-            "     hello     ",
-        };
-        int lines = Math.max(facts.length, art.length);
-        for (int i = 0; i < lines; i++) {
-            String left = i < art.length ? art[i] : "               ";
-            String right = i < facts.length ? facts[i] : "";
-            print(String.format("%-16s%s", left, right));
-        }
-    }
-
-    private void list(String dir) {
-        if (!vfs().isDirectory(dir)) {
-            print("ls: not a folder: " + dir);
-            return;
-        }
-        List<String> entries = vfs().list(dir);
-        if (entries.isEmpty()) {
-            print("  (empty)");
-            return;
-        }
-        for (String entry : entries) {
-            boolean isDir = vfs().isDirectory(entry);
-            print(String.format("  %s  %10s  %s",
-                    isDir ? "d" : "-",
-                    isDir ? "" : Vfs.humanSize(vfs().size(entry)),
-                    Vfs.name(entry) + (isDir ? "/" : "")));
-        }
-    }
-
-    private void tree(String dir, String indent, int depth) {
-        if (depth == 0) {
-            print(dir);
-        }
-        if (depth > 4) {
-            print(indent + "...");
-            return;
-        }
-        List<String> entries = vfs().list(dir);
-        for (int i = 0; i < entries.size(); i++) {
-            String entry = entries.get(i);
-            boolean last = i == entries.size() - 1;
-            print(indent + (last ? "`-- " : "|-- ") + Vfs.name(entry));
-            if (vfs().isDirectory(entry)) {
-                tree(entry, indent + (last ? "    " : "|   "), depth + 1);
-            }
-        }
-    }
-
-    private void grep(List<String> args) {
-        if (args.size() < 2) {
-            print("usage: grep <text> <file>");
-            return;
-        }
-        String needle = args.get(0);
-        String path = resolve(args.get(1));
-        if (!vfs().exists(path)) {
-            print("grep: no such file: " + args.get(1));
-            return;
-        }
-        int number = 0;
-        int hits = 0;
-        for (String line : vfs().read(path).split("\n")) {
-            number++;
-            if (line.toLowerCase().contains(needle.toLowerCase())) {
-                print(String.format("  %4d: %s", number, line));
-                hits++;
-            }
-        }
-        if (hits == 0) {
-            print("  no matches");
-        }
-    }
-
-    private void lines(String path, int count, boolean fromStart) {
-        String[] all = vfs().read(path).split("\n");
-        int from = fromStart ? 0 : Math.max(0, all.length - count);
-        int to = fromStart ? Math.min(count, all.length) : all.length;
-        for (int i = from; i < to; i++) {
-            print(all[i]);
-        }
-    }
-
-    private void changeDirectory(String target) {
-        String path = target == null ? Vfs.HOME : resolve(target);
-        if (!vfs().isDirectory(path)) {
-            print("cd: no such folder: " + (target == null ? path : target));
-            return;
-        }
-        cwd = path;
     }
 
     // ---- helpers -------------------------------------------------------
 
-    private String resolve(String path) {
-        return Vfs.resolve(cwd, path);
-    }
-
-    private void require(String argument, String usage) {
-        if (argument == null) {
-            throw new IllegalArgumentException("usage: " + usage);
+    @Override public void dispose() {
+        if (host != null) {
+            host.close();
+            host = null;
         }
-    }
-
-    private void requireTwo(List<String> args, String usage) {
-        if (args.size() < 2) {
-            throw new IllegalArgumentException("usage: " + usage);
-        }
-    }
-
-    private void requireFile(String argument, java.util.function.Consumer<String> body) {
-        require(argument, "expects a file name");
-        String path = resolve(argument);
-        if (!vfs().exists(path) || vfs().isDirectory(path)) {
-            print("no such file: " + argument);
-            return;
-        }
-        body.accept(path);
+        super.dispose();
     }
 
     /** Splits on whitespace, honouring double quotes around arguments with spaces. */

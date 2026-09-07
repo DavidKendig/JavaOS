@@ -121,7 +121,7 @@ public class MediaPlayerApp extends AppWindow {
             enqueueFolderOf(argument);
             open(argument);
         } else {
-            enqueueFolder(Vfs.HOME + "/Music");
+            enqueueFolder(vfs().firstDirectory(Vfs.HOME + "/Music"));
             status(queue.isEmpty()
                     ? "Playlist empty. Open a file to begin."
                     : queue.size() + " item(s) in /home/duke/Music.");

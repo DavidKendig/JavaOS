@@ -318,7 +318,8 @@ public class CalcApp extends AppWindow {
     }
 
     private void openSheet() {
-        String path = VfsChooser.open(this, vfs(), Vfs.HOME + "/Spreadsheets",
+        String path = VfsChooser.open(this, vfs(),
+                vfs().firstDirectory(Vfs.HOME + "/Documents"),
                 "Open Spreadsheet", "ods", "xlsx", "csv", "tsv");
         if (path != null) {
             load(path);
@@ -348,7 +349,8 @@ public class CalcApp extends AppWindow {
     }
 
     private boolean saveAs() {
-        String path = VfsChooser.save(this, vfs(), Vfs.HOME + "/Spreadsheets",
+        String path = VfsChooser.save(this, vfs(),
+                vfs().firstDirectory(Vfs.HOME + "/Documents"),
                 documentPath() == null ? "sheet1.ods" : Vfs.name(documentPath()),
                 "Save Spreadsheet", "ods", "xlsx", "csv");
         return path != null && writeTo(path);

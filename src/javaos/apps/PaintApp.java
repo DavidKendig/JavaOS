@@ -260,7 +260,8 @@ public class PaintApp extends AppWindow {
     // ---- documents -----------------------------------------------------
 
     private void openImage() {
-        String path = VfsChooser.open(this, vfs(), Vfs.HOME + "/Pictures",
+        String path = VfsChooser.open(this, vfs(),
+                vfs().firstDirectory(Vfs.HOME + "/Pictures"),
                 "Open Picture", "png", "jpg", "jpeg", "gif");
         if (path != null) {
             load(path);
@@ -293,7 +294,8 @@ public class PaintApp extends AppWindow {
     @Override protected boolean saveDocument() {
         String path = documentPath();
         if (path == null || !Vfs.extension(path).equals("png")) {
-            path = VfsChooser.save(this, vfs(), Vfs.HOME + "/Pictures",
+            path = VfsChooser.save(this, vfs(),
+                    vfs().firstDirectory(Vfs.HOME + "/Pictures"),
                     "picture.png", "Save Picture", "png");
         }
         if (path == null) {

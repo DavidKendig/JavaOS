@@ -1,8 +1,12 @@
 package javaos.vfs;
 
+import java.awt.Desktop;
+import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileStore;
+import java.nio.file.FileSystems;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,94 +20,36 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * The system disk. Virtual paths look like {@code /home/duke/Documents} and are
- * mapped onto a sandbox directory under the real user home, so nothing the
- * desktop does can wander outside its own volume.
+ * The file system, which is the host machine's own. There is no volume, no
+ * sandbox and no seeded tree: {@code /C:/Users/duke/notes.txt} is a real file at
+ * {@code C:\Users\duke\notes.txt}, and JavaOS reads and writes it in place.
+ *
+ * <p>What survives from the volume that used to be here is the path vocabulary.
+ * Every application speaks in forward-slashed absolute strings, so this class
+ * keeps translating between those and {@link Path} rather than making thirty
+ * call sites care what platform they are on. On Windows the drive becomes the
+ * first segment -- {@code /C:/Windows} -- and {@code /} itself is My Computer, a
+ * directory that exists only here and whose children are the drives. On
+ * everything else the mapping is the identity, because Unix already agrees.
+ *
+ * <p>Two consequences of losing the sandbox are worth stating plainly. Paths are
+ * no longer confined, so anything the user can reach, JavaOS can reach. And
+ * {@link #delete} now destroys real work, so it goes through the desktop
+ * wastebasket where the platform offers one, and only unlinks when it does not.
  */
 public final class Vfs {
 
-    public static final String HOME = "/home/duke";
+    /** True when drive letters are part of the path vocabulary. */
+    private static final boolean WINDOWS = File.separatorChar == '\\';
 
-    private final Path root;
+    /** My Computer: the synthetic directory above the drives. */
+    public static final String ROOT = "/";
 
-    public Vfs(Path root) {
-        this.root = root.toAbsolutePath().normalize();
-    }
+    /** The user's real home directory, as a virtual path. */
+    public static final String HOME =
+            toVirtual(Paths.get(System.getProperty("user.home", ".")));
 
-    public static Vfs defaultVolume() {
-        Path base = Paths.get(System.getProperty("user.home"), ".javaos", "volume");
-        Vfs vfs = new Vfs(base);
-        vfs.mount();
-        return vfs;
-    }
-
-    public Path realRoot() {
-        return root;
-    }
-
-    /** Creates the volume and seeds the standard directory tree on first boot. */
-    public void mount() {
-        try {
-            Files.createDirectories(root);
-        } catch (IOException e) {
-            throw new UncheckedIOException("cannot create volume at " + root, e);
-        }
-        boolean fresh = !exists(HOME);
-        for (String dir : new String[] {"/etc", "/tmp", "/apps", HOME,
-                HOME + "/Documents", HOME + "/Spreadsheets", HOME + "/Pictures",
-                HOME + "/Music"}) {
-            mkdirs(dir);
-        }
-        if (fresh) {
-            seed();
-        }
-    }
-
-    /** The heading of the seeded release notes, so its underline always matches. */
-    private static String releaseTitle() {
-        return javaos.Version.FULL + " -- Release Notes";
-    }
-
-    private void seed() {
-        write("/etc/motd", """
-                Welcome to JavaOS.
-
-                Everything you see is Swing: the desktop, the window manager,
-                the applications, and the icons. Type 'help' for a command list.
-                """);
-        write(HOME + "/Documents/readme.txt", """
-                %s
-                %s
-
-                Included with this release:
-
-                  * Writer      styled text, saves .odt, .docx, .rtf and .txt
-                  * Calc        a spreadsheet with real formulas, saves .ods,
-                                .xlsx and .csv
-                  * Terminal    a shell over the virtual volume
-                  * Paint       bitmap editor, saves .png
-                  * Media       plays .wav, .au, .aiff and .mid
-                  * Calculator, System Monitor, Mines, Control Panel
-
-                The office formats are read and written in pure Java; no
-                LibreOffice and no third-party library is involved. The same
-                goes for playback: the JDK decodes PCM and sounds MIDI, and
-                anything needing a real codec is handed to VLC if you have it.
-
-                Your files live under /home/duke and persist between sessions
-                in ~/.javaos/volume on the host machine.
-                """.formatted(releaseTitle(), "=".repeat(releaseTitle().length())));
-        write(HOME + "/Documents/notes.txt",
-                "Meeting notes\n-------------\n\n- Ship it\n- Then ship it again\n");
-        // Generated, not carried: the same rule the icons and the wallpaper follow.
-        writeBytes(HOME + "/Music/chime.mid", javaos.media.Chime.bytes());
-        write(HOME + "/Spreadsheets/budget.csv", """
-                Item,Qty,Unit,Total
-                Workstation,4,2400,=B2*C2
-                Monitor,8,600,=B3*C3
-                Coffee,999,3,=B4*C4
-                ,,Grand total,=SUM(D2:D4)
-                """);
+    public Vfs() {
     }
 
     // ---- path handling -------------------------------------------------
@@ -137,25 +83,31 @@ public final class Vfs {
         if (path.equals("~")) {
             return HOME;
         }
-        if (path.startsWith("~/")) {
+        if (path.startsWith("~/") || path.startsWith("~\\")) {
             return normalize(HOME + "/" + path.substring(2));
         }
-        if (path.startsWith("/")) {
-            return normalize(path);
+        // A Windows path typed as-is: C:\Users\duke, or an absolute /usr/bin.
+        if (path.startsWith("/") || path.startsWith("\\") || isDriveQualified(path)) {
+            return toVirtualString(path);
         }
         return normalize(cwd + "/" + path);
+    }
+
+    private static boolean isDriveQualified(String path) {
+        return path.length() >= 2 && path.charAt(1) == ':'
+                && Character.isLetter(path.charAt(0));
     }
 
     public static String parent(String virtualPath) {
         String p = normalize(virtualPath);
         int slash = p.lastIndexOf('/');
-        return slash <= 0 ? "/" : p.substring(0, slash);
+        return slash <= 0 ? ROOT : p.substring(0, slash);
     }
 
     public static String name(String virtualPath) {
         String p = normalize(virtualPath);
-        if (p.equals("/")) {
-            return "/";
+        if (p.equals(ROOT)) {
+            return ROOT;
         }
         return p.substring(p.lastIndexOf('/') + 1);
     }
@@ -170,45 +122,135 @@ public final class Vfs {
         return normalize(dir + "/" + child);
     }
 
-    /** Maps a virtual path onto the host, refusing anything that escapes the volume. */
+    /** True for My Computer, the one directory with no counterpart on the host. */
+    public static boolean isRoot(String path) {
+        return normalize(path).equals(ROOT);
+    }
+
+    /** True when the path is a whole drive, such as {@code /C:}. */
+    public static boolean isDrive(String path) {
+        String p = normalize(path);
+        return !p.equals(ROOT) && parent(p).equals(ROOT);
+    }
+
+    /** A real path as JavaOS spells it: {@code C:\Windows} becomes {@code /C:/Windows}. */
+    public static String toVirtual(Path host) {
+        return toVirtualString(host.toAbsolutePath().normalize().toString());
+    }
+
+    private static String toVirtualString(String hostPath) {
+        String p = hostPath.replace('\\', '/');
+        if (!p.startsWith("/")) {
+            // A drive-qualified path: C:/Windows becomes /C:/Windows.
+            p = "/" + p;
+        }
+        return normalize(p);
+    }
+
+    /**
+     * The host path behind a virtual one.
+     *
+     * @throws IllegalArgumentException for My Computer, which is not a real
+     *         directory on Windows and so has no host path to give
+     */
     public Path host(String virtualPath) {
         String p = normalize(virtualPath);
-        Path real = root.resolve(p.substring(1)).normalize();
-        if (!real.startsWith(root)) {
-            throw new IllegalArgumentException("path escapes the volume: " + virtualPath);
+        if (p.equals(ROOT)) {
+            if (WINDOWS) {
+                throw new IllegalArgumentException(
+                        "My Computer is not a directory on this platform");
+            }
+            return Paths.get("/");
         }
-        return real;
+        if (!WINDOWS) {
+            return Paths.get(p);
+        }
+        String real = p.substring(1).replace('/', '\\');
+        // "C:" alone means the current directory on that drive, which is not
+        // what /C: says; the trailing separator is what makes it the root.
+        if (real.length() == 2 && real.charAt(1) == ':') {
+            real = real + "\\";
+        }
+        return Paths.get(real);
+    }
+
+    /** The drives, or {@code /} on a system that has only the one tree. */
+    public List<String> roots() {
+        List<String> found = new ArrayList<>();
+        for (Path root : FileSystems.getDefault().getRootDirectories()) {
+            found.add(toVirtual(root));
+        }
+        if (found.isEmpty()) {
+            found.add(HOME);
+        }
+        return found;
     }
 
     // ---- operations ----------------------------------------------------
 
     public boolean exists(String path) {
-        return Files.exists(host(path));
+        if (isRoot(path)) {
+            return true;
+        }
+        try {
+            return Files.exists(host(path));
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     public boolean isDirectory(String path) {
-        return Files.isDirectory(host(path));
+        if (isRoot(path)) {
+            return true;
+        }
+        try {
+            return Files.isDirectory(host(path));
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     public long size(String path) {
+        if (isRoot(path)) {
+            return 0;
+        }
         try {
-            return Files.isDirectory(host(path)) ? 0 : Files.size(host(path));
-        } catch (IOException e) {
+            Path h = host(path);
+            return Files.isDirectory(h) ? 0 : Files.size(h);
+        } catch (IOException | RuntimeException e) {
             return 0;
         }
     }
 
     public long modified(String path) {
+        if (isRoot(path)) {
+            return 0;
+        }
         try {
             return Files.getLastModifiedTime(host(path)).toMillis();
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             return 0;
         }
     }
 
-    /** Directories first, then files, each alphabetically -- the classic sort. */
+    /**
+     * Directories first, then files, each alphabetically -- the classic sort.
+     *
+     * <p>An unreadable directory comes back empty rather than throwing. On a
+     * real machine that is an ordinary event, not a fault: every Windows drive
+     * has folders the user is not allowed to enumerate, and a file manager that
+     * threw on the first of them would be useless.
+     */
     public List<String> list(String dir) {
-        Path h = host(dir);
+        if (isRoot(dir)) {
+            return roots();
+        }
+        Path h;
+        try {
+            h = host(dir);
+        } catch (RuntimeException e) {
+            return List.of();
+        }
         if (!Files.isDirectory(h)) {
             return List.of();
         }
@@ -219,8 +261,8 @@ public final class Vfs {
                             .comparing((String p) -> isDirectory(p) ? 0 : 1)
                             .thenComparing(p -> name(p).toLowerCase()))
                     .toList();
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
+        } catch (IOException | RuntimeException e) {
+            return List.of();
         }
     }
 
@@ -255,7 +297,9 @@ public final class Vfs {
     public void writeBytes(String path, byte[] content) {
         try {
             Path h = host(path);
-            Files.createDirectories(h.getParent());
+            if (h.getParent() != null) {
+                Files.createDirectories(h.getParent());
+            }
             Files.write(h, content);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
@@ -268,8 +312,21 @@ public final class Vfs {
         }
     }
 
+    /**
+     * Removes a file or directory, preferring the desktop wastebasket.
+     *
+     * <p>This used to unlink things inside a sandbox nobody minded losing. It
+     * now points at the user's own documents, so it asks the platform to bin
+     * them first, and the deletion stays recoverable through the ordinary
+     * Recycle Bin or Trash. Only where no wastebasket is offered -- a headless
+     * run, or a desktop without the integration -- does it fall back to
+     * unlinking, which is final.
+     */
     public void delete(String path) {
         Path h = host(path);
+        if (moveToTrash(h)) {
+            return;
+        }
         try {
             if (Files.isDirectory(h)) {
                 Files.walkFileTree(h, new SimpleFileVisitor<Path>() {
@@ -293,10 +350,39 @@ public final class Vfs {
         }
     }
 
+    /** True when the platform took the file into its wastebasket. */
+    private static boolean moveToTrash(Path path) {
+        try {
+            if (!Desktop.isDesktopSupported()) {
+                return false;
+            }
+            Desktop desktop = Desktop.getDesktop();
+            if (!desktop.isSupported(Desktop.Action.MOVE_TO_TRASH)) {
+                return false;
+            }
+            return desktop.moveToTrash(path.toFile());
+        } catch (RuntimeException e) {
+            // No desktop integration, or it refused: fall back to unlinking.
+            return false;
+        }
+    }
+
+    /** True when {@link #delete} would bin rather than unlink. Used to word the prompt. */
+    public static boolean hasWastebasket() {
+        try {
+            return Desktop.isDesktopSupported()
+                    && Desktop.getDesktop().isSupported(Desktop.Action.MOVE_TO_TRASH);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     public void move(String from, String to) {
         try {
             Path target = host(to);
-            Files.createDirectories(target.getParent());
+            if (target.getParent() != null) {
+                Files.createDirectories(target.getParent());
+            }
             Files.move(host(from), target, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
@@ -307,7 +393,9 @@ public final class Vfs {
         try {
             Path src = host(from);
             Path dst = host(to);
-            Files.createDirectories(dst.getParent());
+            if (dst.getParent() != null) {
+                Files.createDirectories(dst.getParent());
+            }
             if (Files.isDirectory(src)) {
                 try (Stream<Path> walk = Files.walk(src)) {
                     for (Path p : walk.toList()) {
@@ -349,18 +437,53 @@ public final class Vfs {
         }
     }
 
-    /** Total bytes stored on the volume, for the status bars that insist on knowing. */
-    public long usedBytes() {
-        try (Stream<Path> walk = Files.walk(root)) {
-            return walk.filter(Files::isRegularFile).mapToLong(p -> {
-                try {
-                    return Files.size(p);
-                } catch (IOException e) {
-                    return 0L;
-                }
-            }).sum();
+    // ---- the disk itself -----------------------------------------------
+
+    /**
+     * The first of {@code candidates} that is a directory, or {@link #HOME}.
+     * The old volume guaranteed its own tree; a real machine guarantees nothing,
+     * so every place that used to open a standard folder asks for it this way.
+     */
+    public String firstDirectory(String... candidates) {
+        for (String candidate : candidates) {
+            if (candidate != null && isDirectory(candidate)) {
+                return candidate;
+            }
+        }
+        return isDirectory(HOME) ? HOME : ROOT;
+    }
+
+    /** Total bytes on the drive holding a path, or 0 when it cannot be read. */
+    public long totalSpace(String path) {
+        FileStore store = storeOf(path);
+        try {
+            return store == null ? 0 : store.getTotalSpace();
         } catch (IOException e) {
-            return 0L;
+            return 0;
+        }
+    }
+
+    /** Bytes still free on the drive holding a path, or 0 when it cannot be read. */
+    public long freeSpace(String path) {
+        FileStore store = storeOf(path);
+        try {
+            return store == null ? 0 : store.getUsableSpace();
+        } catch (IOException e) {
+            return 0;
+        }
+    }
+
+    /** Bytes in use on the drive holding a path. */
+    public long usedSpace(String path) {
+        return Math.max(0, totalSpace(path) - freeSpace(path));
+    }
+
+    private FileStore storeOf(String path) {
+        String target = isRoot(path) ? HOME : path;
+        try {
+            return Files.getFileStore(host(target));
+        } catch (IOException | RuntimeException e) {
+            return null;
         }
     }
 

@@ -282,7 +282,8 @@ public final class LibreOffice {
         WRITER("Writer", "--writer"),
         CALC("Calc", "--calc"),
         IMPRESS("Impress", "--impress"),
-        DRAW("Draw", "--draw");
+        DRAW("Draw", "--draw"),
+        BASE("Base", "--base");
 
         public final String label;
         public final String flag;
@@ -295,16 +296,6 @@ public final class LibreOffice {
 
     /** Formats JavaOS hands straight to LibreOffice because it cannot read them. */
     public static final List<String> HANDOVER_ONLY = List.of(
-            "doc", "ppt", "pptx", "odp", "otp", "odg", "otg", "vsd", "vsdx", "pdf");
-
-    public static Module moduleFor(String extension) {
-        String ext = extension.toLowerCase(Locale.ROOT);
-        return switch (ext) {
-            case "odt", "ott", "fodt", "doc", "docx", "rtf" -> Module.WRITER;
-            case "ods", "ots", "fods", "xls", "xlsx", "csv" -> Module.CALC;
-            case "odp", "otp", "ppt", "pptx" -> Module.IMPRESS;
-            case "odg", "otg", "vsd", "vsdx" -> Module.DRAW;
-            default -> null;
-        };
-    }
+            "doc", "ppt", "pptx", "odp", "otp", "odg", "otg", "vsd", "vsdx", "pdf",
+            "mdb", "accdb", "odb");
 }

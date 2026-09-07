@@ -1,6 +1,5 @@
 package javaos.ui;
 
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Font;
@@ -149,6 +148,27 @@ public final class Ui {
             Color fill, Color halo) {
         g.setColor(halo);
         g.drawString(text, x + 1, y + 1);
+        g.setColor(fill);
+        g.drawString(text, x, y);
+    }
+
+    /**
+     * Text ringed by a halo on every side, rather than shadowed on one. Costs
+     * eight more draws than {@link #drawOutlinedText} and is worth it for a
+     * label sitting directly on the wallpaper: a single offset shadow only
+     * separates the glyph from what is below and to the right of it, so pale
+     * text over a pale backdrop stays unreadable along its top edge.
+     */
+    public static void drawHaloText(Graphics2D g, String text, int x, int y,
+            Color fill, Color halo) {
+        g.setColor(halo);
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                if (dx != 0 || dy != 0) {
+                    g.drawString(text, x + dx, y + dy);
+                }
+            }
+        }
         g.setColor(fill);
         g.drawString(text, x, y);
     }

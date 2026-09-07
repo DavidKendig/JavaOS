@@ -165,7 +165,7 @@ public class MonitorApp extends AppWindow {
         for (String key : keys) {
             model.addRow(new Object[] {key, System.getProperty(key)});
         }
-        model.addRow(new Object[] {"javaos.volume", vfs().realRoot().toString()});
+        model.addRow(new Object[] {"user.home", vfs().host(Vfs.HOME).toString()});
         model.addRow(new Object[] {"javaos.apps", String.valueOf(shell.apps().size())});
         return scroll(new JTable(model), 150);
     }
@@ -237,8 +237,9 @@ public class MonitorApp extends AppWindow {
         }
         threadLabel.setText(String.format("  Threads  %d live, %d processors",
                 count, rt.availableProcessors()));
-        volumeLabel.setText(String.format("  Volume   %s used by %d open window(s)",
-                Vfs.humanSize(vfs().usedBytes()), shell.pane().getAllFrames().length));
+        volumeLabel.setText(String.format("  Disk     %s free, %d open window(s)",
+                Vfs.humanSize(vfs().freeSpace(Vfs.HOME)),
+                shell.pane().getAllFrames().length));
     }
 
     /** Rewrites the inventory table whenever the probe reports something new. */

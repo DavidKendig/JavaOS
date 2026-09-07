@@ -35,11 +35,7 @@ public final class SunTheme extends DefaultMetalTheme {
 
         public java.awt.Color primary() { return new java.awt.Color(p2); }
 
-        public java.awt.Color primaryLight() { return new java.awt.Color(p3); }
-
         public java.awt.Color control() { return new java.awt.Color(s3); }
-
-        public java.awt.Color controlShadow() { return new java.awt.Color(s2); }
 
         public static Flavor byName(String name) {
             for (Flavor f : values()) {

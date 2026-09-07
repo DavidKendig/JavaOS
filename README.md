@@ -42,7 +42,7 @@ Or build a runnable jar:
 java -jar javaos.jar
 ```
 
-Options: `--no-splash`, `--theme steel|emerald|ochre|slate`, `--volume <path>`.
+Options: `--no-splash`, `--theme steel|emerald|ochre|slate`.
 
 ## What is included
 
@@ -51,7 +51,7 @@ Options: `--no-splash`, `--theme steel|emerald|ochre|slate`, `--volume <path>`.
 | **Writer** | Styled text with a function bar and a format bar, a page on a grey desk, undo/redo, font and colour control. Opens and saves **`.odt` and `.docx`**, plus `.rtf` and plain text. |
 | **Calc** | 26 × 200 grid with a name box and formula bar. `=A1+B2*2`, `=SUM(A1:A10)`, `AVG`, `MIN`, `MAX`, `COUNT`, `PRODUCT`, `ROUND`, `ABS`, `SQRT`, `PI()`, `^` and parentheses. Circular references report `#CIRC!`. Opens and saves **`.ods` and `.xlsx`**, plus CSV. |
 | **File Manager** | Folder tree, icon and details views, location bar, back/forward history, rename, duplicate, delete, properties. |
-| **Terminal** | A shell over the volume: `ls cd pwd cat head tail wc grep tree mkdir touch rm cp mv edit open apps run ps df free date whoami uname neofetch motd history clear exit`. Up/Down recalls history, Ctrl+L clears. |
+| **Terminal** | The host's own PowerShell, running as a persistent session — pipelines, modules, `git`, your profile's aliases, everything. `cd` and variables carry from one command to the next. Six commands are answered by the window instead: `clear`, `exit`, `javaos`, `apps`, `launch`, `edit`. Up/Down recalls history, Ctrl+L clears, Ctrl+C stops a running command, and a leading `\` forces a line through to the shell. |
 | **Paint** | Pencil, line, rectangle, ellipse, flood fill and eraser, sixteen-colour palette, undo. Saves PNG. |
 | **Media Player** | A playlist, a lit display and a live meter. Plays **`.wav`, `.au`, `.aiff` and MIDI** in pure Java; hands everything else to VLC. |
 | **Calculator** | Four functions, memory keys, `sqrt`, `1/x`, `%`, keyboard entry, LCD-green display. |
@@ -169,30 +169,53 @@ the About box.
 ```
 
 No test framework — plain main methods that print one line per assertion.
-`CoreTest` covers the formula evaluator, the volume, and the media split — it
-generates a one-second tone, reads it back through the sampled engine, and
-checks the seeded chime parses as a real MIDI file. The part that opens an audio
+`CoreTest` covers the formula evaluator, the file system, the backdrops, the
+office hand-over order and the media split — it generates a one-second tone,
+reads it back through the sampled engine, and checks the generated chime parses
+as a real MIDI file. The file-system checks run inside a temporary directory,
+because there is no sandbox left to contain them. The part that opens an audio
 device skips itself on a machine with no sound output. `OfficeInteropTest`
 writes each office format, has **real LibreOffice** convert it to the other
 family, and reads LibreOffice's output back, which checks the reader and the
 writer against an implementation neither of them controls. The interop half
 skips itself when LibreOffice is not installed.
 
-## The volume
+## The file system
 
-Applications cannot see the host filesystem. Paths like `/home/duke/Documents`
-are mapped onto a sandbox directory, and anything that tries to climb out of it
-is normalised back inside.
+JavaOS works on the host machine's own files. There is no volume, no sandbox and
+no seeded tree: **My Computer** opens at the drives, and everything below them is
+the real thing, read and written in place.
+
+What survives from the sandbox is the path vocabulary. Applications speak in
+forward-slashed absolute strings, and `vfs/Vfs.java` translates. On Windows the
+drive is the first segment and `/` is My Computer, a directory that exists only
+in that vocabulary:
 
 ```
-~/.javaos/volume         the virtual disk, seeded on first boot
+/C:/Users/duke/notes.txt   ->  C:\Users\duke\notes.txt
+/                          ->  My Computer, listing the drives
+```
+
+On Unix the mapping is the identity. `~` and `Vfs.HOME` follow the real
+`user.home`.
+
+Two things follow from dropping the sandbox, and both are deliberate:
+
+- **Nothing is confined.** Anything the user account can reach, JavaOS can
+  reach. It runs with exactly the permissions of whoever started it.
+- **Deleting destroys real work.** `Vfs.delete` therefore asks the platform to
+  move the file to the Recycle Bin or Trash first, and only unlinks where no
+  wastebasket is offered — a headless run, or a desktop without the integration.
+  The File Manager says which of the two is about to happen before it does it.
+
+An unreadable directory lists as empty rather than throwing. On a real machine
+that is an ordinary event, not a fault.
+
+Only preferences are still kept aside:
+
+```
 ~/.javaos/settings.properties
 ```
-
-First boot seeds `/home/duke/Documents/welcome.odt` and
-`/home/duke/Spreadsheets/budget.ods`, both written by the engine described
-above, and `/home/duke/Music/chime.mid`, generated by `javax.sound.midi`.
-Delete `~/.javaos` to start from a fresh machine.
 
 ## Layout
 
@@ -215,7 +238,7 @@ src/javaos/
   soffice/LibreOffice    finds an installed LibreOffice and hands files to it
   vlc/Vlc                finds an installed VLC and hands media to it
   Passphrase.java        salt and PBKDF2 for the lock screen
-  vfs/Vfs.java           the sandboxed volume
+  vfs/Vfs.java           the host file system, in JavaOS path vocabulary
   sys/                   Machine (what the desktop knows about the hardware),
                          Probe and the per-platform probes that answer the
                          expensive questions: WindowsProbe (PowerShell/CIM),

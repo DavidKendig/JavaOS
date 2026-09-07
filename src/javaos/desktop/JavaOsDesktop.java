@@ -130,6 +130,12 @@ public class JavaOsDesktop implements Shell {
         // A second launch of a single-document app with the same argument just refocuses it.
         try {
             AppWindow window = app.create(this, argument);
+            // The office applications hand documents to an installed Office or
+            // LibreOffice when there is one, and build no JavaOS window at all.
+            // They have already said so in the status bar.
+            if (window == null) {
+                return null;
+            }
             show(window);
             status("Started " + app.name() + ".");
             return window;
@@ -220,11 +226,6 @@ public class JavaOsDesktop implements Shell {
         taskbar.message(message);
     }
 
-    /** True while the session is sealed behind the lock screen. */
-    public boolean isLocked() {
-        return locked;
-    }
-
     /**
      * Seals the session. The lock screen goes up as the frame's glass pane, so
      * every window underneath keeps running but nothing can reach it.
@@ -289,13 +290,15 @@ public class JavaOsDesktop implements Shell {
 
     // ---- desktop furniture ---------------------------------------------
 
+    /**
+     * Two shortcuts, and no application launcher among them. Everything else
+     * lives in the Launch menu; My Computer opens the host file system at its
+     * drives, and the Terminal is the other way in.
+     */
     private void installDesktopIcons() {
-        addIcon(Icons.computer(32), "My Computer", 20, 20, () -> launch("filemanager", "/"));
-        addIcon(Icons.folderOpen(32), "Home", 20, 110, () -> launch("filemanager", Vfs.HOME));
-        addIcon(Icons.textDocument(32), "Writer", 20, 200, () -> launch("writer"));
-        addIcon(Icons.spreadsheet(32), "Calc", 20, 290, () -> launch("calc"));
-        addIcon(Icons.terminal(32), "Terminal", 20, 380, () -> launch("terminal"));
-        addIcon(Icons.trash(32), "Wastebasket", 20, 470, () -> launch("filemanager", "/tmp"));
+        addIcon(Icons.computer(32), "My Computer", 20, 20,
+                () -> launch("filemanager", Vfs.ROOT));
+        addIcon(Icons.terminal(32), "Terminal", 20, 110, () -> launch("terminal"));
     }
 
     private void addIcon(Icon icon, String label, int x, int y, Runnable action) {

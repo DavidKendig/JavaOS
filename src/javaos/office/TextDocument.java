@@ -120,27 +120,6 @@ public final class TextDocument {
         paragraphs.add(paragraph);
     }
 
-    /** The whole document as plain text, one paragraph per line. */
-    public String plainText() {
-        StringBuilder text = new StringBuilder();
-        for (int i = 0; i < paragraphs.size(); i++) {
-            text.append(paragraphs.get(i).text());
-            if (i < paragraphs.size() - 1) {
-                text.append('\n');
-            }
-        }
-        return text.toString();
-    }
-
-    /** Builds a document from plain text, one paragraph per line. */
-    public static TextDocument ofPlainText(String text) {
-        TextDocument document = new TextDocument();
-        for (String line : text.split("\n", -1)) {
-            document.addParagraph().add(Run.of(line));
-        }
-        return document;
-    }
-
     public boolean isEmpty() {
         return paragraphs.isEmpty()
                 || (paragraphs.size() == 1 && paragraphs.get(0).isEmpty());
