@@ -1,12 +1,17 @@
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 import javax.sound.midi.MidiSystem;
 import javax.sound.midi.Sequence;
@@ -21,6 +26,7 @@ import javaos.Settings;
 import javaos.apps.SheetModel;
 import javaos.interop.OfficeSuite;
 import javaos.msoffice.MsOffice;
+import javaos.sys.HostShell;
 import javaos.media.Media;
 import javaos.media.Player;
 import javaos.media.SampledPlayer;
@@ -40,6 +46,7 @@ public final class CoreTest {
         officeSuite();
         wallpapers();
         screenLock();
+        hostShell();
         System.out.println(failures == 0 ? "ALL CHECKS PASSED" : failures + " CHECK(S) FAILED");
         System.exit(failures == 0 ? 0 : 1);
     }
@@ -434,6 +441,162 @@ public final class CoreTest {
         eq("and the choice survives a reload", false,
                 new Settings(file).preferInstalledOffice());
         Files.deleteIfExists(file);
+    }
+
+    /**
+     * The terminal's interpreter, driven the way the terminal drives it.
+     *
+     * <p>Every check is about the pipe rather than about the shell: that a
+     * command is seen to finish, that its output has arrived by the time the
+     * prompt comes back, that the session remembers what the last command did
+     * to it, and that the awkward cases -- a trailing comment, an accent, a
+     * program that reads standard input, a line that prints something
+     * marker-shaped -- derail none of it. Each of those has hung this pipe at
+     * some point during its writing.
+     */
+    private static void hostShell() throws Exception {
+        StringBuilder seen = new StringBuilder();
+        BlockingQueue<String> prompts = new ArrayBlockingQueue<>(32);
+        HostShell shell;
+        try {
+            shell = new HostShell(new File(System.getProperty("java.io.tmpdir")),
+                    new HostShell.Listener() {
+                        @Override public void output(String text) {
+                            synchronized (seen) {
+                                seen.append(text);
+                            }
+                        }
+
+                        @Override public void ready(String dir, boolean ok, int code) {
+                            prompts.add(dir + "\u0000" + ok + "\u0000" + code);
+                        }
+
+                        @Override public void ended(String reason) {
+                            prompts.add("\u0000false\u00000");
+                        }
+                    });
+        } catch (IOException e) {
+            System.out.println("skip host shell: " + e.getMessage());
+            return;
+        }
+        boolean ps = shell.name().toLowerCase(java.util.Locale.ROOT).startsWith("pwsh")
+                || shell.name().toLowerCase(java.util.Locale.ROOT).startsWith("powershell");
+        String echo = ps ? "Write-Output 'alpha'" : "echo alpha";
+        try {
+            eq("the shell announces itself before the first command", true,
+                    prompts.poll(60, TimeUnit.SECONDS) != null);
+
+            seen.setLength(0);
+            eq("a command is seen to finish", "0", ask(shell, prompts, echo)[2]);
+            eq("and its output arrived before the prompt", true, text(seen).contains("alpha"));
+
+            String set = ps ? "$kept = 'remembered'" : "kept=remembered";
+            ask(shell, prompts, set);
+            seen.setLength(0);
+            ask(shell, prompts, ps ? "Write-Output $kept" : "echo \"$kept\"");
+            eq("the session remembers a variable", true, text(seen).contains("remembered"));
+
+            String tmp = new File(System.getProperty("java.io.tmpdir")).getCanonicalPath();
+            ask(shell, prompts, "cd '" + tmp + "'");
+            eq("and remembers where it was told to go", true,
+                    ask(shell, prompts, echo)[0].equalsIgnoreCase(tmp));
+
+            // A trailing comment used to swallow whatever asks for the prompt.
+            seen.setLength(0);
+            eq("a trailing comment does not hang the prompt", "0",
+                    ask(shell, prompts, echo + "   # a note to self")[2]);
+            eq("and the command still ran", true, text(seen).contains("alpha"));
+
+            // The marker is unguessable, or output could impersonate a prompt.
+            seen.setLength(0);
+            String decoy = "@@JAVAOS:0:ok:0:nowhere";
+            ask(shell, prompts, ps ? "Write-Output '" + decoy + "'" : "echo '" + decoy + "'");
+            eq("marker-shaped output is passed through, not obeyed", true,
+                    text(seen).contains(decoy));
+
+            // Output long enough to be read in several chunks, whose boundaries
+            // land between a carriage return and its newline. A reader that
+            // cuts there turns one line ending into two, and a listing comes
+            // out double spaced -- 396 spurious blank lines in 400 rows, when
+            // this was written.
+            seen.setLength(0);
+            ask(shell, prompts, ps
+                    ? "1..400 | ForEach-Object { 'row {0:d4} ' -f $_ }"
+                    : "for i in $(seq 1 400); do echo \"row $i \"; done");
+            String[] lines = text(seen).split("\n", -1);
+            int rows = 0;
+            int blanks = 0;
+            for (String each : lines) {
+                if (each.startsWith("row ")) {
+                    rows++;
+                } else if (each.isEmpty()) {
+                    blanks++;
+                }
+            }
+            eq("every line of a long output arrives", 400, rows);
+            eq("and none of them is doubled", 1, blanks);
+            eq("with no carriage returns left in it", false, text(seen).contains("\r"));
+
+            if (ps) {
+                // Table-formatted output is the case that catches a prompt
+                // arriving early: PowerShell renders it at the end of the
+                // statement, which is after the marker unless the pipeline is
+                // made to render as it goes.
+                seen.setLength(0);
+                ask(shell, prompts, "Get-ChildItem $env:SystemRoot\\*.ini");
+                eq("formatted output arrives before the prompt does", true,
+                        text(seen).contains("Mode") && text(seen).contains(".ini"));
+
+                eq("a terminating error does not strand the prompt", "false",
+                        ask(shell, prompts, "throw 'thrown on purpose'")[1]);
+                eq("and the session is still there afterwards", "true",
+                        ask(shell, prompts, echo)[1]);
+
+                eq("a failing program is reported as one", "false",
+                        ask(shell, prompts, "cmd /c exit 3")[1]);
+                eq("with the code it failed by", "3",
+                        ask(shell, prompts, "cmd /c exit 3")[2]);
+                eq("a failing cmdlet is reported too", "false",
+                        ask(shell, prompts, "Get-Item C:\\javaos-no-such-thing")[1]);
+                eq("and the next success clears the verdict", "true",
+                        ask(shell, prompts, echo)[1]);
+
+                seen.setLength(0);
+                ask(shell, prompts, "Write-Output 'caf\u00e9 \u65e5\u672c'");
+                eq("non-ascii survives the round trip", true,
+                        text(seen).contains("caf\u00e9 \u65e5\u672c"));
+
+                // The classic way to hang a shell down a pipe: the prompting
+                // command eats the line that was meant to ask for the prompt.
+                seen.setLength(0);
+                shell.send("$who = Read-Host 'name'; Write-Output \"hello $who\"");
+                Thread.sleep(1500);
+                eq("a prompting command holds the terminal", true, shell.isBusy());
+                shell.write("Duke\n");
+                eq("and answering it releases the prompt", true,
+                        prompts.poll(60, TimeUnit.SECONDS) != null);
+                eq("with what it was told", true, text(seen).contains("hello Duke"));
+            }
+        } finally {
+            shell.close();
+        }
+        Thread.sleep(500);
+        eq("closing stops the interpreter", false, shell.isAlive());
+    }
+
+    /** Runs one command and reports the prompt it came back with. */
+    private static String[] ask(HostShell shell, BlockingQueue<String> prompts, String command)
+            throws Exception {
+        shell.send(command);
+        String reply = prompts.poll(60, TimeUnit.SECONDS);
+        return reply == null ? new String[] {"", "timed out", "timed out"}
+                : reply.split("\u0000", -1);
+    }
+
+    private static String text(StringBuilder seen) {
+        synchronized (seen) {
+            return seen.toString();
+        }
     }
 
     /** The lock screen's passphrase: stored as a derivation, never as text. */

@@ -51,7 +51,7 @@ Options: `--no-splash`, `--theme steel|emerald|ochre|slate`.
 | **Writer** | Styled text with a function bar and a format bar, a page on a grey desk, undo/redo, font and colour control. Opens and saves **`.odt` and `.docx`**, plus `.rtf` and plain text. |
 | **Calc** | 26 × 200 grid with a name box and formula bar. `=A1+B2*2`, `=SUM(A1:A10)`, `AVG`, `MIN`, `MAX`, `COUNT`, `PRODUCT`, `ROUND`, `ABS`, `SQRT`, `PI()`, `^` and parentheses. Circular references report `#CIRC!`. Opens and saves **`.ods` and `.xlsx`**, plus CSV. |
 | **File Manager** | Folder tree, icon and details views, location bar, back/forward history, rename, duplicate, delete, properties. |
-| **Terminal** | A shell over the host file system: `ls cd pwd cat head tail wc grep tree mkdir touch rm cp mv edit open apps run ps df free date whoami uname neofetch motd history clear exit`. Up/Down recalls history, Ctrl+L clears. |
+| **Terminal** | The host's own PowerShell, running as a persistent session — pipelines, modules, `git`, your profile's aliases, everything. `cd` and variables carry from one command to the next. Six commands are answered by the window instead: `clear`, `exit`, `javaos`, `apps`, `launch`, `edit`. Up/Down recalls history, Ctrl+L clears, Ctrl+C stops a running command, and a leading `\` forces a line through to the shell. |
 | **Paint** | Pencil, line, rectangle, ellipse, flood fill and eraser, sixteen-colour palette, undo. Saves PNG. |
 | **Media Player** | A playlist, a lit display and a live meter. Plays **`.wav`, `.au`, `.aiff` and MIDI** in pure Java; hands everything else to VLC. |
 | **Calculator** | Four functions, memory keys, `sqrt`, `1/x`, `%`, keyboard entry, LCD-green display. |
